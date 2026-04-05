@@ -1,0 +1,10 @@
+# Mac
+.DS_Store
+
+# cSharp
+**/obj/
+**/bin/
+A3Tests/TestResults/
+
+# Nix
+.direnv/

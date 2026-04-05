@@ -1,0 +1,21 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Builds and runs
+    cmds:
+      - dotnet build A3
+      - dotnet test A3Tests --logger "console;verbosity=detailed" -- {{.CLI_ARGS}}
+  format:
+    desc: Formats the application
+    cmds:
+      - dotnet format A3 {{.CLI_ARGS}}
+      - dotnet format A3Tests {{.CLI_ARGS}}
+  build:
+    desc: Builds the solution
+    cmds:
+      - dotnet build A3 --configuration Release
+      - dotnet build A3Tests --configuration Release
+  test:
+    desc: Runs the tests
+    cmd: dotnet test A3Tests --logger "console;verbosity=detailed" -- {{.CLI_ARGS}}
