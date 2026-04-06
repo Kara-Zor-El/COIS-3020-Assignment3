@@ -66,7 +66,19 @@ Bulk Insert is a rather interesting operation to implement. The naive approach t
 
 ### Delete
 
-TODO: 
+Delete is implemented in a top-down manner. It rebalances on the way down before recursing, so it never has to repair on the way up after removing the key. We start by collapsing any internal nodes with only child so that the tree height can shrink early. We then call `DeleteHelp` for the core logic of our delete function
+
+#### DeleteHelp
+When we are deleting a key through the tree, we have two cases, if the current node is a leaf then this is the node where the key must be removed from (if it exists). If the current node is an internal node, we first determine which bucket to traverse to next using the same comparison logic as search. Before descending we check if that child is at minimum occupancy, and if it is, we rebalance it first using `FixChild` so we can safely continue downwards.
+
+After we recurse, if a subtree's minimum key changed because of the delete/rebalance, we update the separator key in the parent so routing still works correctly. If an internal root ends up with one child, we can collapse it which helps shrink the height of the tree cleanly.
+
+#### FixChild
+`FixChild` handles the rebalance work needed before descending into a child that is at minimum occupancy. We try to bottom from the left sibling first, then from the right sibling, and if neither can lend, we merge.
+
+For leaf nodes, borrow means moving one key/value pair from a sibling and then updating the parent separator key. For internal nodes, borrow means rotating a separator key through the parent while also moving a child pointer. If we merge, we combine the two sibling nodes and remove the separator key and child pointer from the parent.
+
+This approach keeps delete top-down and predictable, because we only walk one path from root to leaf.
 
 ### Merge
 
