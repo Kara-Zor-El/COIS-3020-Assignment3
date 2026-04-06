@@ -1,42 +1,50 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
-using BPlusTree;
 using System.Collections.Generic;
 using System.Linq;
+using BPlusTree;
+
+#nullable enable
 
 namespace A3Tests;
 
 [TestClass]
 public class BPlusTreeTests {
   #region Constructor tests
+  // NOTE: We are just smoke testing here as we can't inspect the private tree internals.
+  //       A smoke test is just a basic test that checks if the code runs, not it's behavior.
   [TestMethod]
   public void Rank3DoesNotThrow()
       => _ = new BPlusTree<int, string>(3);
-
   [TestMethod]
   public void Rank4DoesNotThrow()
       => _ = new BPlusTree<int, string>(4);
-
   [TestMethod]
   public void Rank1024DoesNotThrow()
       => _ = new BPlusTree<int, string>(1024);
-
+  // Rank less than 3 is invalid because we would not be able to maintain the B+ tree properties.
   [TestMethod]
   public void RankLessThan3Throws()
       => Assert.Throws<ArgumentException>(() => new BPlusTree<int, string>(2));
   #endregion
 
+  // Test both Insert and Search together as testing one relies on the other.
   #region Insert and Search tests
+  // We do an initial test that random input order works
   [TestMethod]
   public void InsertAndSearchRandomOrderAllKeysFound() {
     var tree = new BPlusTree<int, string>(3);
     var data = new[] { 8, 3, 10, 1, 6, 9, 11, 2, 5, 7 };
 
     foreach (var x in data)
-      tree.Insert(x.ToString());
+      tree.Insert(new Record<int, string>(x, x.ToString())); // We just care this doesn't throw
 
-    foreach (var x in data)
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+    foreach (var x in data) {
+      Record<int, string>? result = null;
+      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found in tree.");
+      Assert.IsNotNull(result, $"Result for key {x} should not be null.");
+      Assert.AreEqual(x.ToString(), result.Value);
+    }
   }
 
   [TestMethod]
@@ -44,11 +52,16 @@ public class BPlusTreeTests {
     var tree = new BPlusTree<int, string>(20);
     var data = Enumerable.Range(1, 1000).ToList();
 
-    foreach (var x in data)
-      tree.Insert(x.ToString());
+    foreach (var x in data) {
+      tree.Insert(new Record<int, string>(x, x.ToString()));
+    }
 
-    foreach (var x in data)
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+    foreach (var x in data) {
+      Record<int, string>? result = null;
+      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found in tree.");
+      Assert.IsNotNull(result, $"Result for key {x} should not be null.");
+      Assert.AreEqual(x.ToString(), result.Value);
+    }
   }
 
   [TestMethod]
@@ -56,18 +69,24 @@ public class BPlusTreeTests {
     var tree = new BPlusTree<string, string>(3);
     var data = Enumerable.Range(0, 50).Select(i => i.ToString()).ToList();
 
-    foreach (var x in data)
-      tree.Insert(x);
+    foreach (var x in data) {
+      tree.Insert(new Record<string, string>(x, x)); // We just care this doesn't throw
+    }
 
-    foreach (var x in data)
-      Assert.AreEqual(x, tree.Search(x));
+    foreach (var x in data) {
+      Record<string, string>? result = null;
+      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found in tree.");
+      Assert.IsNotNull(result, $"Result for key {x} should not be null.");
+      Assert.AreEqual(x, result.Value);
+    }
   }
 
   [TestMethod]
   public void InsertDuplicateKeyThrowsDuplicateKeyException() {
     var tree = new BPlusTree<int, string>(3);
-    tree.Insert("1");
-    Assert.Throws<DuplicateKeyException>(() => tree.Insert("1"));
+    tree.Insert(new Record<int, string>(1, "1"));
+    Assert.Throws<DuplicateKeyException>(() => tree.Insert(new Record<int, string>(1, "1")));
+    Assert.Throws<DuplicateKeyException>(() => tree.Insert(new Record<int, string>(1, "3")));
   }
   #endregion
 
@@ -75,27 +94,37 @@ public class BPlusTreeTests {
   [TestMethod]
   public void SearchEmptyTreeReturnsNull() {
     var tree = new BPlusTree<int, string>(3);
-    Assert.IsNull(tree.Search(11));
+    Record<int, string>? result = null;
+    Assert.IsFalse(tree.Search(11, ref result));
+    Assert.IsNull(result);
   }
 
   [TestMethod]
   public void SearchExistingKeysReturnsValues() {
     var tree = new BPlusTree<int, string>(3);
-    foreach (var x in new[] { 8, 3, 10, 1, 6 })
-      tree.Insert(x.ToString());
-
-    Assert.AreEqual("8", tree.Search(8));
-    Assert.AreEqual("3", tree.Search(3));
+    foreach (var x in new[] { 8, 3, 10, 1, 6 }) {
+      tree.Insert(new Record<int, string>(x, x.ToString()));
+    }
+    Record<int, string>? result = null;
+    Assert.IsTrue(tree.Search(8, ref result));
+    Assert.IsNotNull(result);
+    Assert.AreEqual("8", result.Value);
+    Assert.IsTrue(tree.Search(3, ref result));
+    Assert.IsNotNull(result);
+    Assert.AreEqual("3", result.Value);
   }
 
   [TestMethod]
   public void SearchNonExistingKeyReturnsNull() {
     var tree = new BPlusTree<int, string>(3);
-    foreach (var x in new[] { 8, 3, 10, 1, 6 })
-      tree.Insert(x.ToString());
-
-    Assert.IsNull(tree.Search(5));
-    Assert.IsNull(tree.Search(11));
+    foreach (var x in new[] { 8, 3, 10, 1, 6 }) {
+      tree.Insert(new Record<int, string>(x, x.ToString()));
+    }
+    Record<int, string>? result = null;
+    Assert.IsFalse(tree.Search(5, ref result));
+    Assert.IsNull(result);
+    Assert.IsFalse(tree.Search(11, ref result));
+    Assert.IsNull(result);
   }
 
   [TestMethod]
@@ -123,7 +152,7 @@ public class BPlusTreeTests {
   [TestMethod]
   public void SearchRecordTypeUsesRecordKey() {
     var tree = new BPlusTree<Key, Record<Key>>(3);
-    var record = new Record<Key>(new Key(7), new[] { "x", "y" });
+    var record = new Record<Key>(new Key(7), new List<string>() { "x", "y" });
 
     tree.Insert(record);
     var found = tree.Search(new Key(7), out var value);
@@ -389,12 +418,17 @@ public class BPlusTreeTests {
   [TestMethod]
   public void DeleteUntilOneRemainingThenEmpty() {
     var tree = new BPlusTree<int, string>(3);
-    tree.BulkInsert(Enumerable.Range(0, 5).Select(x => x.ToString()));
-    foreach (var x in new[] { 0, 1, 2, 3 }) {
+    var data = Enumerable.Range(0, 5).Select(x => x.ToString());
+    tree.BulkInsert(data);
+    var stack = new Stack<int>(data.Select(x => int.Parse(x)));
+    for (int i = 0; i < stack.Count - 1; i++) {
+      var x = stack.Pop();
       Assert.IsTrue(tree.Delete(x));
     }
-    Assert.AreEqual("4", tree.Search(4));
-    Assert.IsTrue(tree.Delete(4));
+    string? result = null;
+    Assert.IsTrue(tree.Search(stack.Peek(), ref result));
+    Assert.AreEqual(stack.Peek().ToString(), result);
+    Assert.IsTrue(tree.Delete(stack.Pop()));
     Assert.IsTrue(tree.IsEmpty);
   }
   #endregion
@@ -417,8 +451,11 @@ public class BPlusTreeTests {
 
     var merged = tree1.Merge(tree2);
 
-    foreach (var x in Enumerable.Range(0, 30))
-      Assert.AreEqual(x.ToString(), merged.Search(x));
+    foreach (var x in Enumerable.Range(0, 30)) {
+      string? result = null;
+      Assert.IsTrue(merged.Search(x, ref result), $"Key {x} should be found in merged tree.");
+      Assert.AreEqual(x.ToString(), result, $"Key {x} should have correct value in merged tree.");
+    }
   }
 
   [TestMethod]
@@ -431,8 +468,11 @@ public class BPlusTreeTests {
 
     var merged = tree1.Merge(tree2);   // rank of result = tree1's rank = 4
 
-    foreach (var x in Enumerable.Range(0, 30))
-      Assert.AreEqual(x.ToString(), merged.Search(x));
+    foreach (var x in Enumerable.Range(0, 30)) {
+      string? result = null;
+      Assert.IsTrue(merged.Search(x, ref result), $"Key {x} should be found in merged tree.");
+      Assert.AreEqual(x.ToString(), result, $"Key {x} should have correct value in merged tree.");
+    }
   }
 
   [TestMethod]
@@ -453,8 +493,11 @@ public class BPlusTreeTests {
     var empty = new BPlusTree<int, string>(4);
 
     var merged = tree1.Merge(empty);
-    foreach (var x in Enumerable.Range(0, 20))
-      Assert.AreEqual(x.ToString(), merged.Search(x));
+    foreach (var x in Enumerable.Range(0, 20)) {
+      string? result = null;
+      Assert.IsTrue(merged.Search(x, ref result), $"Key {x} should be found in merged tree.");
+      Assert.AreEqual(x.ToString(), result, $"Key {x} should have correct value in merged tree.");
+    }
   }
   #endregion
 
@@ -464,8 +507,11 @@ public class BPlusTreeTests {
     var data = Enumerable.Range(0, 30).Select(x => x.ToString()).ToList();
     var tree = new BPlusTree<int, string>(4, data);
 
-    foreach (var x in Enumerable.Range(0, 30))
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+    foreach (var x in Enumerable.Range(0, 30)) {
+      string? result = null;
+      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found.");
+      Assert.AreEqual(x.ToString(), result);
+    }
   }
 
   [TestMethod]
@@ -485,16 +531,24 @@ public class BPlusTreeTests {
       foreach (var key in keys)
         tree.Insert(key.ToString());
 
-      foreach (var key in keys)
-        Assert.AreEqual(key.ToString(), tree.Search(key), $"Missing key {key} for rank {rank}");
+      foreach (var key in keys) {
+        string? result = null;
+        Assert.IsTrue(tree.Search(key, ref result), $"Key {key} should be found for rank {rank}");
+        Assert.AreEqual(key.ToString(), result, $"Missing key {key} for rank {rank}");
+      }
 
       foreach (var key in keys.Take(100)) {
         Assert.IsTrue(tree.Delete(key), $"Delete should succeed for key {key} and rank {rank}");
-        Assert.IsNull(tree.Search(key), $"Deleted key {key} should be absent for rank {rank}");
+        string? result = null;
+        Assert.IsNull(tree.Search(key, ref result), $"Search should return null for deleted key {key} and rank {rank}");
+        Assert.IsNull(result, $"Deleted key {key} should be absent for rank {rank}");
       }
 
-      foreach (var key in keys.Skip(100))
-        Assert.AreEqual(key.ToString(), tree.Search(key), $"Remaining key {key} missing for rank {rank}");
+      foreach (var key in keys.Skip(100)) {
+        string? result = null;
+        Assert.IsTrue(tree.Search(key, ref result), $"Key {key} should still be found for rank {rank}");
+        Assert.AreEqual(key.ToString(), result, $"Remaining key {key} missing for rank {rank}");
+      }
     }
   }
 
@@ -503,20 +557,20 @@ public class BPlusTreeTests {
     var asc = new BPlusTree<int, string>(4);
     foreach (var key in Enumerable.Range(0, 200))
       asc.Insert(key.ToString());
-    foreach (var key in Enumerable.Range(0, 200))
-      Assert.AreEqual(key.ToString(), asc.Search(key));
+    foreach (var key in Enumerable.Range(0, 200)) {
+      string? result = null;
+      Assert.IsTrue(asc.Search(key, ref result), $"Key {key} should be found in ascending tree.");
+      Assert.AreEqual(key.ToString(), result);
+    }
 
     var desc = new BPlusTree<int, string>(4);
     foreach (var key in Enumerable.Range(0, 200).Reverse())
       desc.Insert(key.ToString());
-    foreach (var key in Enumerable.Range(0, 200))
-      Assert.AreEqual(key.ToString(), desc.Search(key));
+    foreach (var key in Enumerable.Range(0, 200)) {
+      string? result = null;
+      Assert.IsTrue(desc.Search(key, ref result), $"Key {key} should be found in descending tree.");
+      Assert.AreEqual(key.ToString(), result);
+    }
   }
   #endregion
-}
-
-internal static class BPlusTreeTestExtensions {
-  public static TValue? Search<TKey, TValue>(this BPlusTree<TKey, TValue> tree, TKey key) where TKey : IComparable<TKey> {
-    return tree.Search(key, out var value) ? value : default;
-  }
 }
