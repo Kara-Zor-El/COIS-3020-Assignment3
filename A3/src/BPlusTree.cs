@@ -585,7 +585,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// <param name="entries">The entries to insert</param>
   /// <exception cref="InvalidOperationException">Thrown if the tree is not empty</exception>
   public void BulkInsert(IEnumerable<Record<TKey, TValue>> entries) {
-    if (entries.Any()) return;
+    if (entries.Count() <= 0) return;
     if (!this.IsEmpty) throw new InvalidOperationException("BulkInsert requires an empty tree");
     var list = entries.ToList();
     // Time Complexity: O(n log n)

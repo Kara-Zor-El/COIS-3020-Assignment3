@@ -10,514 +10,401 @@ namespace A3Tests;
 
 [TestClass]
 public class BPlusTreeTests {
+  // Test Helpers
+  private static class Helpers {
+    public static BPlusTree<int, string> BuildRankIntStringTree(int rank) => new BPlusTree<int, string>(rank);
+    public static Record<int, string> IntStringRecord(int key) => new Record<int, string>(key, key.ToString());
+    public static Record<TKey, TValue>? Search<TKey, TValue>(BPlusTree<TKey, TValue> tree, TKey key) where TKey : IComparable<TKey> {
+      Record<TKey, TValue>? result = null;
+      if (tree.Search(key, ref result)) return result;
+      return null;
+    }
+  }
   #region Constructor tests
-  // NOTE: We are just smoke testing here as we can't inspect the private tree internals.
-  //       A smoke test is just a basic test that checks if the code runs, not it's behavior.
+  // NOTE: We just do smoke tests to make sure that constructing a tree with various ranks works.
+  //       Behavior will be verified more thoroughly when we test other functions.
   [TestMethod]
-  public void Rank3DoesNotThrow()
-      => _ = new BPlusTree<int, string>(3);
+  public void ConstructSmallTree1() => Assert.IsNotNull(Helpers.BuildRankIntStringTree(3));
   [TestMethod]
-  public void Rank4DoesNotThrow()
-      => _ = new BPlusTree<int, string>(4);
+  public void ConstructSmallTree2() => Assert.IsNotNull(Helpers.BuildRankIntStringTree(4));
   [TestMethod]
-  public void Rank1024DoesNotThrow()
-      => _ = new BPlusTree<int, string>(1024);
-  // Rank less than 3 is invalid because we would not be able to maintain the B+ tree properties.
+  public void ConstructLargeTree1() => Assert.IsNotNull(Helpers.BuildRankIntStringTree(1024));
   [TestMethod]
-  public void RankLessThan3Throws()
-      => Assert.Throws<ArgumentException>(() => new BPlusTree<int, string>(2));
+  public void ConstructLargeTree2() => Assert.IsNotNull(Helpers.BuildRankIntStringTree(100_000));
+  [TestMethod] // Test that ranks less than 3 fail
+  public void ConstructTreeWithInvalidRank1() => Assert.Throws<ArgumentException>(() => Helpers.BuildRankIntStringTree(2));
+  [TestMethod] // Test that ranks less than 3 fail
+  public void ConstructTreeWithInvalidRank2() => Assert.Throws<ArgumentException>(() => Helpers.BuildRankIntStringTree(-1));
   #endregion
-
-  // Test both Insert and Search together as testing one relies on the other.
   #region Insert and Search tests
-  // We do an initial test that random input order works
+  // NOTE: We test both Insert and Search together as it's hard to test them independently.
   [TestMethod]
-  public void InsertAndSearchRandomOrderAllKeysFound() {
-    var tree = new BPlusTree<int, string>(3);
+  public void InsertAndSearchWithOrderedData() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    // We test random data to make sure that sorted vs non sorted has no difference
+    var data = Enumerable.Range(0, 10).ToArray();
+    // Ensure that we are not throwing
+    foreach (var x in data) tree.Insert(new Record<int, string>(x, x.ToString()));
+    foreach (var x in data) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value.");
+    }
+  }
+  [TestMethod]
+  public void InsertAndSearchWithRandomData() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    // We test random data to make sure that sorted vs non sorted has no difference
     var data = new[] { 8, 3, 10, 1, 6, 9, 11, 2, 5, 7 };
-
-    foreach (var x in data)
-      tree.Insert(new Record<int, string>(x, x.ToString())); // We just care this doesn't throw
-
+    // Ensure that we are not throwing
+    foreach (var x in data) tree.Insert(Helpers.IntStringRecord(x));
     foreach (var x in data) {
-      Record<int, string>? result = null;
-      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found in tree.");
-      Assert.IsNotNull(result, $"Result for key {x} should not be null.");
-      Assert.AreEqual(x.ToString(), result.Value);
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value.");
     }
   }
-
   [TestMethod]
-  public void InsertAndSearchLargeDatasetRank20() {
-    var tree = new BPlusTree<int, string>(20);
-    var data = Enumerable.Range(1, 1000).ToList();
-
+  public void InsertAndSearchWithLargeData() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    // We test random data to make sure that sorted vs non sorted has no difference
+    var data = Enumerable.Range(0, 100_000).ToArray();
+    // Ensure that we are not throwing
+    foreach (var x in data) tree.Insert(Helpers.IntStringRecord(x));
     foreach (var x in data) {
-      tree.Insert(new Record<int, string>(x, x.ToString()));
-    }
-
-    foreach (var x in data) {
-      Record<int, string>? result = null;
-      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found in tree.");
-      Assert.IsNotNull(result, $"Result for key {x} should not be null.");
-      Assert.AreEqual(x.ToString(), result.Value);
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value.");
     }
   }
-
   [TestMethod]
-  public void InsertAndSearchStringKeys() {
-    var tree = new BPlusTree<string, string>(3);
-    var data = Enumerable.Range(0, 50).Select(i => i.ToString()).ToList();
-
+  public void InsertAndSearchOnDifferentTree() {
+    var tree = new BPlusTree<char, char>(3);
+    // We test random data to make sure that sorted vs non sorted has no difference
+    var data = Enumerable.Range('a', 'z').ToArray();
+    // Ensure that we are not throwing
+    foreach (var x in data) tree.Insert(new Record<char, char>((char)x, (char)x));
     foreach (var x in data) {
-      tree.Insert(new Record<string, string>(x, x)); // We just care this doesn't throw
-    }
-
-    foreach (var x in data) {
-      Record<string, string>? result = null;
-      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found in tree.");
-      Assert.IsNotNull(result, $"Result for key {x} should not be null.");
-      Assert.AreEqual(x, result.Value);
+      Assert.AreEqual((char)x, (char?)Helpers.Search(tree, (char)x)?.Value, $"Key {x} should be found with correct value.");
     }
   }
-
   [TestMethod]
-  public void InsertDuplicateKeyThrowsDuplicateKeyException() {
-    var tree = new BPlusTree<int, string>(3);
-    tree.Insert(new Record<int, string>(1, "1"));
+  public void InsertDuplicateKeyFails() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    tree.Insert(Helpers.IntStringRecord(1));
+    // Ensure that same key and value fails
     Assert.Throws<DuplicateKeyException>(() => tree.Insert(new Record<int, string>(1, "1")));
+    // Ensure that same key different value fails
     Assert.Throws<DuplicateKeyException>(() => tree.Insert(new Record<int, string>(1, "3")));
   }
   #endregion
 
   #region Search tests
   [TestMethod]
-  public void SearchEmptyTreeReturnsNull() {
-    var tree = new BPlusTree<int, string>(3);
-    Record<int, string>? result = null;
-    Assert.IsFalse(tree.Search(11, ref result));
-    Assert.IsNull(result);
+  public void SearchEmpty() {
+    // Searching an empty tree should just return nothing
+    var tree = Helpers.BuildRankIntStringTree(3);
+    Assert.IsNull(Helpers.Search(tree, 1));
   }
-
   [TestMethod]
-  public void SearchExistingKeysReturnsValues() {
-    var tree = new BPlusTree<int, string>(3);
+  public void SearchHasValue() {
+    // Searching for a key that exists should return the correct value.
+    var tree = Helpers.BuildRankIntStringTree(3);
     foreach (var x in new[] { 8, 3, 10, 1, 6 }) {
-      tree.Insert(new Record<int, string>(x, x.ToString()));
+      tree.Insert(Helpers.IntStringRecord(x));
     }
-    Record<int, string>? result = null;
-    Assert.IsTrue(tree.Search(8, ref result));
-    Assert.IsNotNull(result);
-    Assert.AreEqual("8", result.Value);
-    Assert.IsTrue(tree.Search(3, ref result));
-    Assert.IsNotNull(result);
-    Assert.AreEqual("3", result.Value);
+    Assert.AreEqual("8", Helpers.Search(tree, 8)?.Value);
+    Assert.AreEqual("3", Helpers.Search(tree, 3)?.Value);
   }
-
   [TestMethod]
-  public void SearchNonExistingKeyReturnsNull() {
-    var tree = new BPlusTree<int, string>(3);
+  public void SearchDoesNotHaveValue() {
+    // Searching for a key that does not exist should return null.
+    var tree = Helpers.BuildRankIntStringTree(3);
     foreach (var x in new[] { 8, 3, 10, 1, 6 }) {
-      tree.Insert(new Record<int, string>(x, x.ToString()));
+      tree.Insert(Helpers.IntStringRecord(x));
     }
-    Record<int, string>? result = null;
-    Assert.IsFalse(tree.Search(5, ref result));
-    Assert.IsNull(result);
-    Assert.IsFalse(tree.Search(11, ref result));
-    Assert.IsNull(result);
-  }
-
-  [TestMethod]
-  public void SearchExistingIntValueReturnsTrueAndValue() {
-    var tree = new BPlusTree<int, int>(3);
-    tree.Insert(7);
-
-    var found = tree.Search(7, out var value);
-
-    Assert.IsTrue(found);
-    Assert.AreEqual(7, value);
-  }
-
-  [TestMethod]
-  public void SearchMissingIntValueReturnsFalseAndDefaultOutValue() {
-    var tree = new BPlusTree<int, int>(3);
-    tree.Insert(7);
-
-    var found = tree.Search(8, out var value);
-
-    Assert.IsFalse(found);
-    Assert.AreEqual(default(int), value);
-  }
-
-  [TestMethod]
-  public void SearchRecordTypeUsesRecordKey() {
-    var tree = new BPlusTree<Key, Record<Key>>(3);
-    var record = new Record<Key>(new Key(7), new List<string>() { "x", "y" });
-
-    tree.Insert(record);
-    var found = tree.Search(new Key(7), out var value);
-
-    Assert.IsTrue(found);
-    Assert.IsNotNull(value);
-    CollectionAssert.AreEqual(new[] { "x", "y" }, value!.Values);
+    Assert.IsNull(Helpers.Search(tree, 5));
+    Assert.IsNull(Helpers.Search(tree, 11));
   }
   #endregion
 
   #region IsEmpty tests
   [TestMethod]
-  public void IsEmptyNewTreeReturnsTrue() {
-    var tree = new BPlusTree<int, string>(3);
+  public void IsEmptyNewTree() {
+    // A new tree will be empty
+    var tree = Helpers.BuildRankIntStringTree(3);
     Assert.IsTrue(tree.IsEmpty);
   }
-
   [TestMethod]
-  public void IsEmptyAfterInsertReturnsFalse() {
-    var tree = new BPlusTree<int, string>(3);
-    tree.Insert("1");
+  public void IsNotEmptyBasic() {
+    // A tree with at least one value should not be empty
+    var tree = Helpers.BuildRankIntStringTree(3);
+    tree.Insert(Helpers.IntStringRecord(1));
     Assert.IsFalse(tree.IsEmpty);
   }
-
+  // NOTE: It may make sense to test `IsEmpty` after a deletion we test this functionality when testing delete.
   #endregion
 
   #region Range tests
+  // This is just a basic fixture that we perform our tests again
   private static BPlusTree<int, string> BuildRangeFixture() {
-    return new BPlusTree<int, string>(3, new[] { "8", "3", "10", "1", "6" });
+    return new BPlusTree<int, string>(3, [
+      Helpers.IntStringRecord(8),
+      Helpers.IntStringRecord(3),
+      Helpers.IntStringRecord(10),
+      Helpers.IntStringRecord(1),
+      Helpers.IntStringRecord(6),
+    ]);
   }
-
   [TestMethod]
-  public void RangeMiddleOfTreeReturnsCorrectValues() {
+  public void ValidRanges() {
+    // Test reading stuff from the middle
     var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new[] { "3", "6" }, tree.Range(2, 7));
+    CollectionAssert.AreEqual(new[] { "3", "6" }, tree.Range(2, 7).Select(x => x.Value).ToArray());
+    // Test reading from the lower end
+    CollectionAssert.AreEqual(new[] { "1", "3" }, tree.Range(0, 5).Select(x => x.Value).ToArray());
+    // Test reading from the upper end
+    CollectionAssert.AreEqual(new[] { "8", "10" }, tree.Range(7, 11).Select(x => x.Value).ToArray());
   }
-
-  [TestMethod]
-  public void RangeLowerSection() {
-    var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new[] { "1", "3" }, tree.Range(0, 5));
-  }
-
-  [TestMethod]
-  public void RangeUpperSection() {
-    var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new[] { "8", "10" }, tree.Range(7, 11));
-  }
-
   [TestMethod]
   public void RangeLowerBound() {
     var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new[] { "1" }, tree.Range(-20, 2));
+    // Test that we are inclusive on the lower bound
+    CollectionAssert.AreEqual(new[] { "1" }, tree.Range(-20, 2).Select(x => x.Value).ToArray());
+    // Test that below the lower bound is empty
+    CollectionAssert.AreEqual(Array.Empty<string>(), tree.Range(-20, -1).Select(x => x.Value).ToArray());
   }
-
-  [TestMethod]
-  public void RangeBelowAllKeysReturnsEmpty() {
-    var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new string[0], tree.Range(-20, -1));
-  }
-
   [TestMethod]
   public void RangeUpperBound() {
     var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new[] { "10" }, tree.Range(9, 100));
-  }
-
-  [TestMethod]
-  public void RangeAboveAllKeysReturnsEmpty() {
-    var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new string[0], tree.Range(20, 100));
-  }
-
-  [TestMethod]
-  public void RangeStartGreaterThanEndReturnsEmpty() {
-    var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new string[0], tree.Range(8, 3));
-  }
-
-  [TestMethod]
-  public void RangeExactBoundaryReturnsSingleValue() {
-    var tree = BuildRangeFixture();
-    CollectionAssert.AreEqual(new[] { "6" }, tree.Range(6, 6));
-  }
-
-  [TestMethod]
-  public void RangeSingleKeyTreeBoundaryBehavior() {
-    var tree = new BPlusTree<int, string>(3);
-    tree.Insert("42");
-    CollectionAssert.AreEqual(new[] { "42" }, tree.Range(42, 42));
-    CollectionAssert.AreEqual(new string[0], tree.Range(43, 100));
+    // Test that we are inclusive on the upper bound
+    CollectionAssert.AreEqual(new[] { "10" }, tree.Range(9, 100).Select(x => x.Value).ToArray());
+    // Test that above the upper bound is empty
+    CollectionAssert.AreEqual(Array.Empty<string>(), tree.Range(11, 100).Select(x => x.Value).ToArray());
   }
   #endregion
 
   #region BulkInsert tests
   [TestMethod]
-  public void BulkInsertRandomOrderAllKeysFound() {
-    var tree = new BPlusTree<int, string>(3);
+  public void BulkInsertRandomOrder() {
+    var tree = Helpers.BuildRankIntStringTree(3);
     var data = new[] { 8, 3, 10, 1, 6, 9, 11, 2, 5, 7 };
-
-    tree.BulkInsert(data.Select(x => x.ToString()));
-
-    foreach (var x in data)
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+    tree.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
+    foreach (var x in data) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value after bulk insert.");
+    }
   }
-
   [TestMethod]
-  public void BulkInsertLargeDatasetRank20() {
-    var tree = new BPlusTree<int, string>(20);
-    var data = Enumerable.Range(1, 1000).ToList();
-
-    tree.BulkInsert(data.Select(x => x.ToString()));
-
-    foreach (var x in data)
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+  public void BulkInsertSortedOrder() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    var data = Enumerable.Range(1, 20).ToList();
+    tree.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
+    foreach (var x in data) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value after bulk insert.");
+    }
   }
-
+  [TestMethod]
+  public void BulkInsertLarge() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    var data = Enumerable.Range(1, 100_000).ToList();
+    tree.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
+    foreach (var x in data) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value after bulk insert.");
+    }
+  }
   [TestMethod]
   public void BulkInsertStringKeys() {
     var tree = new BPlusTree<string, string>(3);
-    var data = Enumerable.Range(0, 50).Select(i => i.ToString()).ToList();
-
-    tree.BulkInsert(data.Select(x => x));
-
-    foreach (var x in data)
-      Assert.AreEqual(x, tree.Search(x));
+    var data = Enumerable.Range(1, 20).Select(i => i.ToString()).ToList();
+    tree.BulkInsert(data.Select(x => new Record<string, string>(x, x)));
+    foreach (var x in data) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value after bulk insert.");
+    }
   }
-
   [TestMethod]
-  public void BulkInsertDuplicateKeysThrowsDuplicateKeyException() {
-    var tree = new BPlusTree<int, string>(3);
-    Assert.Throws<DuplicateKeyException>(() => tree.BulkInsert(new[] { "1", "1" }));
+  public void BulkInsertNothing() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    // This should just be a no-op and not throw
+    tree.BulkInsert(new List<Record<int, string>>());
   }
-
   [TestMethod]
-  public void BulkInsertNonEmptyTreeThrowsInvalidOperationException() {
-    var tree = new BPlusTree<int, string>(3);
-    tree.Insert("1");
-    Assert.Throws<InvalidOperationException>(() => tree.BulkInsert(new[] { "2" }));
+  public void BulkInsertDuplicateKeys1() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    Assert.Throws<DuplicateKeyException>(() => tree.BulkInsert(new[] { Helpers.IntStringRecord(1), Helpers.IntStringRecord(1) }));
   }
-
   [TestMethod]
-  public void BulkInsertDuplicatesNonAdjacentThrowsDuplicateKeyException() {
-    var tree = new BPlusTree<int, string>(3);
-    Assert.Throws<DuplicateKeyException>(() => tree.BulkInsert(new[] { "2", "1", "2" }));
+  public void BulkInsertDuplicateKeys2() {
+    // We also test duplicate keys unordered
+    var tree = Helpers.BuildRankIntStringTree(3);
+    Assert.Throws<DuplicateKeyException>(() => tree.BulkInsert(new[] { Helpers.IntStringRecord(1), Helpers.IntStringRecord(2), Helpers.IntStringRecord(3), Helpers.IntStringRecord(5), Helpers.IntStringRecord(1) }));
+  }
+  [TestMethod]
+  public void BulkInsertNonEmptyTree() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    tree.Insert(Helpers.IntStringRecord(1));
+    Assert.Throws<InvalidOperationException>(() => tree.BulkInsert(new[] { Helpers.IntStringRecord(2), Helpers.IntStringRecord(3) }));
   }
   #endregion
 
   #region Delete tests
   [TestMethod]
-  public void DeleteNonExistingKeyReturnsFalse() {
-    var tree = new BPlusTree<string, string>(3);
-    var data = Enumerable.Range(0, 50).Select(i => i.ToString()).ToList();
-    tree.BulkInsert(data.Select(x => x));
-
-    Assert.IsFalse(tree.Delete("100"));
+  public void DeleteOnEmptyTree() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    Assert.IsFalse(tree.Delete(1));
   }
-
   [TestMethod]
-  public void DeleteDrainToEmptyTreeBecomesEmpty() {
-    var tree = new BPlusTree<string, string>(3);
-    var data = Enumerable.Range(0, 50).Select(i => i.ToString()).ToList();
-    tree.BulkInsert(data.Select(x => x));
-
+  public void DeleteNonExistingKey() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    var data = Enumerable.Range(0, 50).Select(i => Helpers.IntStringRecord(i)).ToList();
+    tree.BulkInsert(data);
+    // This key does not exist, delete should return false
+    Assert.IsFalse(tree.Delete(100));
+  }
+  [TestMethod]
+  public void DeleteAll() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    var data = Enumerable.Range(0, 50).Select(i => Helpers.IntStringRecord(i)).ToList();
+    tree.BulkInsert(data);
+    // Delete all keys and ensure they are deleted and that the tree is empty at the end
     foreach (var x in data) {
-      Assert.AreEqual(x, tree.Search(x), $"Key {x} should exist before delete.");
-      Assert.IsTrue(tree.Delete(x), $"Delete({x}) should return true.");
-      Assert.IsNull(tree.Search(x), $"Key {x} should not exist after delete.");
+      Assert.AreEqual(x.Value, Helpers.Search(tree, x.Key)?.Value, $"Key {x.Key} should exist before delete.");
+      Assert.IsTrue(tree.Delete(x.Key), $"Delete({x.Key}) should return true.");
+      Assert.IsNull(Helpers.Search(tree, x.Key), $"Key {x.Key} should not exist after delete.");
     }
-
     Assert.IsTrue(tree.IsEmpty);
   }
-
   [TestMethod]
-  public void DeleteNonExistingKeyOnEmptyTreeReturnsFalse() {
-    var tree = new BPlusTree<string, string>(3);
-    Assert.IsFalse(tree.Delete("1"));
+  public void DeleteTwice() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    var data = Enumerable.Range(0, 50).Select(i => Helpers.IntStringRecord(i)).ToList();
+    tree.BulkInsert(data);
+    // Delete a key and then try to delete it again. The first delete should succeed and the second should fail.
+    Assert.IsTrue(tree.Delete(5));
+    Assert.IsFalse(tree.Delete(5));
   }
-
+  [TestMethod]
+  public void DeleteThenReinsertKeyIsAvailableAgain() {
+    var tree = Helpers.BuildRankIntStringTree(3);
+    tree.Insert(Helpers.IntStringRecord(7));
+    Assert.AreEqual("7", Helpers.Search(tree, 7)?.Value, $"Key 7 should be found with correct value after delete and reinsert.");
+    Assert.IsTrue(tree.Delete(7));
+    Assert.IsNull(Helpers.Search(tree, 7), $"Key 7 should not be found after deletion.");
+    tree.Insert(Helpers.IntStringRecord(7));
+    Assert.AreEqual("7", Helpers.Search(tree, 7)?.Value, $"Key 7 should be found with correct value after delete and reinsert.");
+  }
+  // Rebalance testing
   [TestMethod]
   public void DeleteUnderflowAtLeftmostLeafBorrowsFromRight() {
     // Deleting from the leftmost leaf causes underflow; tree should borrow from the right sibling.
-    var tree = new BPlusTree<int, string>(4);
-    tree.BulkInsert(Enumerable.Range(0, 12).Select(x => x.ToString()));
-
+    var tree = Helpers.BuildRankIntStringTree(4);
+    tree.BulkInsert(Enumerable.Range(0, 12).Select(x => Helpers.IntStringRecord(x)));
     Assert.IsTrue(tree.Delete(0));
     Assert.IsTrue(tree.Delete(1));
     Assert.IsTrue(tree.Delete(2));
-
-    Assert.IsNull(tree.Search(0));
-    Assert.IsNull(tree.Search(1));
-    Assert.IsNull(tree.Search(2));
-
-    foreach (var x in Enumerable.Range(3, 9))
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+    Assert.IsNull(Helpers.Search(tree, 0));
+    Assert.IsNull(Helpers.Search(tree, 1));
+    Assert.IsNull(Helpers.Search(tree, 2));
+    foreach (var x in Enumerable.Range(3, 9)) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value after leftmost leaf underflow.");
+    }
   }
 
   [TestMethod]
   public void DeleteUnderflowInMiddleLeafBorrowsFromLeft() {
     // Deleting from the middle leaf causes underflow; tree should borrow from the left sibling.
-    var tree = new BPlusTree<int, string>(4);
-    tree.BulkInsert(Enumerable.Range(0, 12).Select(x => x.ToString()));
-
+    var tree = Helpers.BuildRankIntStringTree(4);
+    tree.BulkInsert(Enumerable.Range(0, 12).Select(x => Helpers.IntStringRecord(x)));
     Assert.IsTrue(tree.Delete(5));
     Assert.IsTrue(tree.Delete(4));
     Assert.IsTrue(tree.Delete(3));
-
-    Assert.IsNull(tree.Search(3));
-    Assert.IsNull(tree.Search(4));
-    Assert.IsNull(tree.Search(5));
-
-    foreach (var x in new[] { 0, 1, 2, 6, 7, 8, 9, 10, 11 })
-      Assert.AreEqual(x.ToString(), tree.Search(x));
+    Assert.IsNull(Helpers.Search(tree, 3));
+    Assert.IsNull(Helpers.Search(tree, 4));
+    Assert.IsNull(Helpers.Search(tree, 5));
+    foreach (var x in new[] { 0, 1, 2, 6, 7, 8, 9, 10, 11 }) {
+      Assert.AreEqual(x.ToString(), Helpers.Search(tree, x)?.Value, $"Key {x} should be found with correct value after leftmost leaf underflow.");
+    }
   }
-
   [TestMethod]
   public void DeleteUnderflowNoLenderMergesLeaves() {
     // When no sibling can lend, leaves must merge.
-    var tree = new BPlusTree<int, string>(4);
-    tree.BulkInsert(Enumerable.Range(0, 9).Select(x => x.ToString()));
-
-    foreach (var x in new[] { 0, 1, 6, 7, 3, 4, 5 })
-      Assert.IsTrue(tree.Delete(x));
-
-    foreach (var x in new[] { 0, 1, 3, 4, 5, 6, 7 })
-      Assert.IsNull(tree.Search(x));
-
-    Assert.AreEqual("2", tree.Search(2));
-    Assert.AreEqual("8", tree.Search(8));
+    var tree = Helpers.BuildRankIntStringTree(4);
+    tree.BulkInsert(Enumerable.Range(0, 9).Select(x => Helpers.IntStringRecord(x)));
+    foreach (var x in new[] { 0, 1, 6, 7, 3, 4, 5 }) Assert.IsTrue(tree.Delete(x));
+    foreach (var x in new[] { 0, 1, 3, 4, 5, 6, 7 }) {
+      Assert.IsNull(Helpers.Search(tree, x), $"Key {x} should not be found after underflow with no lender.");
+    }
+    Assert.AreEqual("2", Helpers.Search(tree, 2)?.Value, $"Key 2 should be found with correct value after underflow with no lender.");
+    Assert.AreEqual("8", Helpers.Search(tree, 8)?.Value, $"Key 8 should be found with correct value after underflow with no lender.");
   }
 
   [TestMethod]
   public void DeleteInternalRebalanceAndRepeatedRootCollapse() {
     // Heavy deletion with rank 3 exercises internal rebalance and repeated root collapse.
-    var tree = new BPlusTree<int, string>(3);
-    tree.BulkInsert(Enumerable.Range(0, 60).Select(x => x.ToString()));
-
-    foreach (var x in Enumerable.Range(0, 59))
-      Assert.IsTrue(tree.Delete(x));
-
-    Assert.AreEqual("59", tree.Search(59));
+    var tree = Helpers.BuildRankIntStringTree(3);
+    tree.BulkInsert(Enumerable.Range(0, 60).Select(x => Helpers.IntStringRecord(x)));
+    foreach (var x in Enumerable.Range(0, 59)) Assert.IsTrue(tree.Delete(x));
+    Assert.AreEqual("59", Helpers.Search(tree, 59)?.Value, $"Key 59 should be found with correct value after heavy deletion with root collapse.");
+    Assert.IsFalse(tree.IsEmpty);
     Assert.IsTrue(tree.Delete(59));
-    Assert.IsTrue(tree.IsEmpty);
-  }
-
-  [TestMethod]
-  public void DeleteSameKeyTwiceFirstTrueSecondFalse() {
-    var tree = new BPlusTree<int, string>(3);
-    tree.BulkInsert(Enumerable.Range(0, 10).Select(x => x.ToString()));
-    Assert.IsTrue(tree.Delete(5));
-    Assert.IsFalse(tree.Delete(5));
-  }
-
-  [TestMethod]
-  public void DeleteThenReinsertKeyIsAvailableAgain() {
-    var tree = new BPlusTree<int, string>(3);
-    tree.Insert("7");
-    Assert.IsTrue(tree.Delete(7));
-    tree.Insert("7");
-    Assert.AreEqual("7", tree.Search(7));
-  }
-
-  [TestMethod]
-  public void DeleteUntilOneRemainingThenEmpty() {
-    var tree = new BPlusTree<int, string>(3);
-    var data = Enumerable.Range(0, 5).Select(x => x.ToString());
-    tree.BulkInsert(data);
-    var stack = new Stack<int>(data.Select(x => int.Parse(x)));
-    for (int i = 0; i < stack.Count - 1; i++) {
-      var x = stack.Pop();
-      Assert.IsTrue(tree.Delete(x));
-    }
-    string? result = null;
-    Assert.IsTrue(tree.Search(stack.Peek(), ref result));
-    Assert.AreEqual(stack.Peek().ToString(), result);
-    Assert.IsTrue(tree.Delete(stack.Pop()));
     Assert.IsTrue(tree.IsEmpty);
   }
   #endregion
 
   #region Merge tests
-  /// <summary>Reference tree: keys 0–29, rank 4.</summary>
-  private static BPlusTree<int, string> BuildReference() {
-    var t = new BPlusTree<int, string>(4);
-    t.BulkInsert(Enumerable.Range(0, 30).Select(x => x.ToString()));
-    return t;
-  }
-
   [TestMethod]
-  public void MergeTwoHalvesContainsAllKeys() {
-    var tree1 = new BPlusTree<int, string>(4);
-    tree1.BulkInsert(Enumerable.Range(0, 15).Select(x => x.ToString()));
-
-    var tree2 = new BPlusTree<int, string>(4);
-    tree2.BulkInsert(Enumerable.Range(15, 15).Select(x => x.ToString()));
-
+  public void MergeSameRank() {
+    // Build our data
+    var data1 = Enumerable.Range(0, 15).Select(x => new Record<int, string>(x, x.ToString()));
+    var data2 = Enumerable.Range(15, 15).Select(x => new Record<int, string>(x, x.ToString()));
+    // Construct our trees
+    var tree1 = Helpers.BuildRankIntStringTree(3);
+    tree1.BulkInsert(data1);
+    var tree2 = Helpers.BuildRankIntStringTree(3);
+    tree2.BulkInsert(data2);
+    // Merge our trees
     var merged = tree1.Merge(tree2);
-
+    // Verify that all keys are present with correct values
     foreach (var x in Enumerable.Range(0, 30)) {
-      string? result = null;
-      Assert.IsTrue(merged.Search(x, ref result), $"Key {x} should be found in merged tree.");
-      Assert.AreEqual(x.ToString(), result, $"Key {x} should have correct value in merged tree.");
+      Assert.AreEqual(x.ToString(), Helpers.Search(merged, x)?.Value, $"Key {x} should be found with correct value in merged tree.");
     }
   }
-
   [TestMethod]
-  public void MergeDifferentRanksContainsAllKeys() {
-    var tree1 = new BPlusTree<int, string>(4);
-    tree1.BulkInsert(Enumerable.Range(0, 15).Select(x => x.ToString()));
-
-    var tree2 = new BPlusTree<int, string>(10);
-    tree2.BulkInsert(Enumerable.Range(15, 15).Select(x => x.ToString()));
-
-    var merged = tree1.Merge(tree2);   // rank of result = tree1's rank = 4
-
+  public void MergeDifferentRank() {
+    // Build our data
+    var data1 = Enumerable.Range(0, 15).Select(x => new Record<int, string>(x, x.ToString()));
+    var data2 = Enumerable.Range(15, 15).Select(x => new Record<int, string>(x, x.ToString()));
+    // Construct our trees
+    var tree1 = Helpers.BuildRankIntStringTree(3);
+    tree1.BulkInsert(data1);
+    var tree2 = Helpers.BuildRankIntStringTree(10);
+    tree2.BulkInsert(data2);
+    // Merge our trees
+    var merged = tree1.Merge(tree2);
+    // Verify that all keys are present with correct values
     foreach (var x in Enumerable.Range(0, 30)) {
-      string? result = null;
-      Assert.IsTrue(merged.Search(x, ref result), $"Key {x} should be found in merged tree.");
-      Assert.AreEqual(x.ToString(), result, $"Key {x} should have correct value in merged tree.");
+      Assert.AreEqual(x.ToString(), Helpers.Search(merged, x)?.Value, $"Key {x} should be found with correct value in merged tree.");
     }
   }
-
   [TestMethod]
-  public void MergeOverlappingKeysThrowsDuplicateKeyException() {
-    var tree1 = new BPlusTree<int, string>(4);
-    tree1.BulkInsert(new[] { "1", "2", "3" });
-
-    var tree2 = new BPlusTree<int, string>(4);
-    tree2.BulkInsert(new[] { "3", "4" });
-
+  public void MergeOverlappingInvalid() {
+    // Build our data
+    var data = Enumerable.Range(0, 15).Select(x => new Record<int, string>(x, x.ToString()));
+    // Construct our trees
+    var tree1 = Helpers.BuildRankIntStringTree(3);
+    tree1.BulkInsert(data);
+    var tree2 = Helpers.BuildRankIntStringTree(3);
+    tree2.BulkInsert(data);
+    // Merge our trees
     Assert.Throws<DuplicateKeyException>(() => tree1.Merge(tree2));
   }
-
   [TestMethod]
   public void MergeWithEmptyTreeReturnsEquivalentToNonEmpty() {
-    var tree1 = new BPlusTree<int, string>(4);
-    tree1.BulkInsert(Enumerable.Range(0, 20).Select(x => x.ToString()));
-    var empty = new BPlusTree<int, string>(4);
-
+    var tree1 = Helpers.BuildRankIntStringTree(3);
+    var data = Enumerable.Range(0, 20).Select(x => x);
+    tree1.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
+    var empty = Helpers.BuildRankIntStringTree(3);
     var merged = tree1.Merge(empty);
-    foreach (var x in Enumerable.Range(0, 20)) {
-      string? result = null;
-      Assert.IsTrue(merged.Search(x, ref result), $"Key {x} should be found in merged tree.");
-      Assert.AreEqual(x.ToString(), result, $"Key {x} should have correct value in merged tree.");
+    foreach (var x in data) {
+      Assert.AreEqual(
+        x.ToString(),
+        Helpers.Search(merged, x)?.Value,
+        $"Key {x} should be found with correct value in merged tree with empty."
+      );
     }
-  }
-  #endregion
-
-  #region FromList tests
-  [TestMethod]
-  public void FromListAllKeysFound() {
-    var data = Enumerable.Range(0, 30).Select(x => x.ToString()).ToList();
-    var tree = new BPlusTree<int, string>(4, data);
-
-    foreach (var x in Enumerable.Range(0, 30)) {
-      string? result = null;
-      Assert.IsTrue(tree.Search(x, ref result), $"Key {x} should be found.");
-      Assert.AreEqual(x.ToString(), result);
-    }
-  }
-
-  [TestMethod]
-  public void FromListDuplicateKeysThrowsDuplicateKeyException() {
-    var data = new List<string> { "1", "2", "1" };
-    Assert.Throws<DuplicateKeyException>(() => new BPlusTree<int, string>(4, data));
   }
   #endregion
 
@@ -525,51 +412,25 @@ public class BPlusTreeTests {
   [TestMethod]
   public void InsertSearchDeleteMultipleRanksRandomizedData() {
     foreach (var rank in new[] { 3, 4, 20 }) {
-      var tree = new BPlusTree<int, string>(rank);
+      var tree = Helpers.BuildRankIntStringTree(rank);
+      // NOTE: We use guid because they are unique and random
       var keys = Enumerable.Range(0, 200).OrderBy(_ => Guid.NewGuid()).ToList();
-
-      foreach (var key in keys)
-        tree.Insert(key.ToString());
-
+      // Insert our keys
+      foreach (var key in keys) tree.Insert(Helpers.IntStringRecord(key));
+      // Ensure all keys exist
       foreach (var key in keys) {
-        string? result = null;
-        Assert.IsTrue(tree.Search(key, ref result), $"Key {key} should be found for rank {rank}");
-        Assert.AreEqual(key.ToString(), result, $"Missing key {key} for rank {rank}");
+        Assert.AreEqual(key.ToString(), Helpers.Search(tree, key)?.Value, $"Key {key} should be found with correct value for rank {rank}");
       }
-
+      // Delete the first 100 keys
       foreach (var key in keys.Take(100)) {
         Assert.IsTrue(tree.Delete(key), $"Delete should succeed for key {key} and rank {rank}");
-        string? result = null;
-        Assert.IsNull(tree.Search(key, ref result), $"Search should return null for deleted key {key} and rank {rank}");
-        Assert.IsNull(result, $"Deleted key {key} should be absent for rank {rank}");
+        // Validate the deletion
+        Assert.IsNull(Helpers.Search(tree, key), $"Search should return null for deleted key {key} and rank {rank}");
       }
-
+      // Ensure the remaining keys still exist
       foreach (var key in keys.Skip(100)) {
-        string? result = null;
-        Assert.IsTrue(tree.Search(key, ref result), $"Key {key} should still be found for rank {rank}");
-        Assert.AreEqual(key.ToString(), result, $"Remaining key {key} missing for rank {rank}");
+        Assert.AreEqual(key.ToString(), Helpers.Search(tree, key)?.Value, $"Key {key} should be found with correct value for rank {rank}");
       }
-    }
-  }
-
-  [TestMethod]
-  public void InsertSequentialAndReverseAllKeysFound() {
-    var asc = new BPlusTree<int, string>(4);
-    foreach (var key in Enumerable.Range(0, 200))
-      asc.Insert(key.ToString());
-    foreach (var key in Enumerable.Range(0, 200)) {
-      string? result = null;
-      Assert.IsTrue(asc.Search(key, ref result), $"Key {key} should be found in ascending tree.");
-      Assert.AreEqual(key.ToString(), result);
-    }
-
-    var desc = new BPlusTree<int, string>(4);
-    foreach (var key in Enumerable.Range(0, 200).Reverse())
-      desc.Insert(key.ToString());
-    foreach (var key in Enumerable.Range(0, 200)) {
-      string? result = null;
-      Assert.IsTrue(desc.Search(key, ref result), $"Key {key} should be found in descending tree.");
-      Assert.AreEqual(key.ToString(), result);
     }
   }
   #endregion

@@ -18,4 +18,5 @@ public sealed class Key(int Value) : IComparable<Key>, IComparable {
 public class Record<KType, TValue>(KType Key, TValue Value) where KType : IComparable<KType> {
   public KType Key { get; } = Key;
   public TValue Value { get; } = Value;
+  public override string ToString() => $"({this.Key}, {this.Value})";
 }
