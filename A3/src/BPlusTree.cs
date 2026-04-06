@@ -234,6 +234,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       }
     }
   }
+
   /// <summary>
   /// Helper function for the Insert method
   /// Time Complexity: O(log n)
@@ -284,12 +285,13 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   private List<(TKey? firstKey, Node node)> BuildLeaves(List<Record<TKey, TValue>> list) {
     int chunkSize = this._rank - 1; // Max keys per leaf
     var acc = new List<(TKey? firstKey, Node leaf)>();
-    var chunks = list.Chunk(chunkSize);
     LeafNode? prev = null;
-    foreach (var chunk in chunks) {
+    foreach (var chunk in list.Chunk(chunkSize)) {
       // NOTE: If we didn't have to iterate through the chunk to get the keys, this function could be o(n/chunkSize) instead of o(n)
-      prev = new LeafNode(chunk.Select(e => e.Key).ToList(), chunk.ToList(), prev?.Next ?? null);
-      acc.Add((chunk[0].Key, prev));
+      var curr = new LeafNode(chunk.Select(e => e.Key).ToList(), chunk.ToList(), null);
+      if (prev != null) prev.Next = curr;
+      acc.Add((chunk[0].Key, curr));
+      prev = curr;
     }
     return acc;
   }
@@ -362,35 +364,42 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// </summary>
   private bool DeleteHelp(Node node, TKey key, bool isRoot) {
     int maxKeys = this._rank - 1;
-    // ceil((rank-1)/2) for non root nodes
-    int minKeys = isRoot ? 1 : (maxKeys + 1) / 2;
+    // ceil((rank-1)/2) for non-root nodes
+    int minKeys = (maxKeys + 1) / 2;
 
     switch (node) {
       case LeafNode leaf: {
-          int index = leaf.ChildIndex(key);
-          if (leaf.Keys[index].CompareTo(key) != 0) return false;
+          int index = leaf.ChildIndex(key) - 1;
+          if (index < 0 || index >= leaf.Length || leaf.Keys[index].CompareTo(key) != 0) return false;
           leaf.Keys.RemoveAt(index);
           leaf.Values.RemoveAt(index);
           return true;
         }
       case InternalNode iNode: {
-          int childIndex = iNode.ChildIndex(key) - 1;
+          int childIndex = iNode.ChildIndex(key);
           var child = iNode.Children[childIndex];
 
           // Preemptively fix the child if it at minimum occupancy
           // After Fix, `child` may have been replaced (merge changes the index),
           // so we re-read it below
-          if (child.Length < minKeys && !isRoot) {
+          if (child.Length <= minKeys && iNode.Children.Count > 1) {
             childIndex = this.FixChild(iNode, childIndex);
             child = iNode.Children[childIndex];
           }
 
           // After a possible merge, the root might now only have one child, so we need to collapse it
-          if (iNode.Keys.Count == 0 && iNode.Children.Count == 1) {
+          if (isRoot && iNode.Keys.Count == 0 && iNode.Children.Count == 1) {
             this._root = iNode.Children[0];
             return this.DeleteHelp(this._root, key, isRoot: true);
           }
-          return this.DeleteHelp(child, key, false);
+          bool deleted = this.DeleteHelp(child, key, false);
+          // If a child's first key changed due to deletion/rebalance, refresh the separator.
+          if (deleted && childIndex > 0 && child.Length > 0) {
+            var curr = child;
+            while (curr is InternalNode internalNode) curr = internalNode.Children[0];
+            iNode.Keys[childIndex - 1] = ((LeafNode)curr).Keys[0]; // the first key of the leftmost leaf
+          }
+          return deleted;
         }
       default: throw new InvalidOperationException("Unknown node type");
     }
@@ -435,8 +444,8 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
           // For internal nodes: copy the separator down into the child, pushing the
           // siblings last key up to be the new separator
           childInternal.Keys.Insert(0, parent.Keys[childIndex - 1]);
-          childInternal.Children.Insert(0, leftInternal.Children[-1]);
-          parent.Keys[childIndex - 1] = leftInternal.Keys[-1];
+          childInternal.Children.Insert(0, leftInternal.Children[leftInternal.Children.Count - 1]);
+          parent.Keys[childIndex - 1] = leftInternal.Keys[leftInternal.Length - 1];
           leftInternal.Keys.RemoveAt(leftInternal.Length - 1);
           leftInternal.Children.RemoveAt(leftInternal.Children.Count - 1);
         }
@@ -454,7 +463,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
           childLeaf.Values.Add(rightLeaf.Values[0]);
           rightLeaf.Keys.RemoveAt(0);
           rightLeaf.Values.RemoveAt(0);
-          parent.Keys[childIndex] = childLeaf.Keys[0];
+          parent.Keys[childIndex] = rightLeaf.Keys[0];
         } else if (rightSibling is InternalNode rightInternal && child is InternalNode childInternal) {
           childInternal.Keys.Add(parent.Keys[childIndex]);
           childInternal.Children.Add(rightInternal.Children[0]);
