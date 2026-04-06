@@ -2,7 +2,6 @@ using System;
 
 namespace BPlusTree;
 
-// TODO: Document
 public sealed class Key(int Value) : IComparable<Key>, IComparable {
   public int Value { get; } = Value;
   public int CompareTo(Key other) => this.Value.CompareTo(other.Value);
@@ -14,7 +13,7 @@ public sealed class Key(int Value) : IComparable<Key>, IComparable {
 
   public override string ToString() => this.Value.ToString();
 }
-// TODO: Document
+
 public class Record<KType, TValue>(KType Key, TValue Value) where KType : IComparable<KType> {
   public KType Key { get; } = Key;
   public TValue Value { get; } = Value;

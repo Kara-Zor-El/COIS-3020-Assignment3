@@ -1,0 +1,997 @@
+module BPlusTree
+
+from "buffer" include Buffer
+from "list" include List
+from "option" include Option
+from "uint32" include Uint32
+from "number" include Number
+
+/** An exception thrown when a duplicate key is inserted into the B+tree. */
+provide exception DuplicateKey
+
+/**
+ * A node in the B+tree. This can be either an internal node or a leaf node.
+ */
+enum rec Node<kType, rType> {
+  // NOTE: It would be more efficient to use Vector over List
+  /** An internal node in the B+tree */
+  Internal{
+    /** The keys in this node. Max length: rank - 1 */
+    keys: Box<List<kType>>,
+    /** The children of this node. Max length: rank */
+    children: Box<List<Node<kType, rType>>>,
+  },
+  /** A leaf node in the B+tree */
+  Leaf{
+    /** The keys in this node. Max length: rank */
+    keys: Box<List<kType>>,
+    /** The values associated with the keys in this node. Max length: rank */
+    values: Box<List<rType>>,
+    /** The next leaf node in the linked list, for efficient range queries. */
+    next: Box<Option<Node<kType, rType>>>,
+  },
+}
+
+/**
+ * A B+tree data structure.
+ *
+ * A B+tree is a variant of a B-tree in which each node contains only keys,
+ * and to which an additional level of indirection is added to allow for efficient range queries
+ * In a B+tree, all values are stored in the leaf nodes, and the internal nodes only store keys
+ * to guide the search process.
+ *
+ * WIKI: https://en.wikipedia.org/wiki/B%2B_tree
+ */
+abstract record BPlusTree<kType, rType> {
+  rank: Uint32,
+  mut root: Node<kType, rType>,
+}
+
+/**
+ * Internal Helper functions for the B+tree implementation.
+ *
+ * These functions are not exposed to the user and are used to implement the main
+ * operations of the B+tree, such as search, insert, delete, etc.
+ */
+module Internal {
+  /**
+   * Checks if a given node is full, meaning it has the maximum number of keys allowed by the rank of the B+tree.
+   *
+   * Time Complexity: O(n) where n is the number of keys in the node, since we need to calculate the length of the keys list
+   *
+   * @param rank: The rank of the B+tree, which determines the maximum number of keys in each node
+   * @param node: The node to check for fullness
+   *
+   * @returns `true` if the node is full, `false` otherwise
+   */
+  provide let isNodeFull = (rank: Uint32, node: Node<kType, rType>) => {
+    // TODO: Validate that this is fully correct
+    use Uint32.{ (-), (>=) }
+    // NOTE: This isn't `2t-1` because we use rank over `minDegree` which saves computation time and is more intuitive
+    match (node) {
+      // NOTE: List.length(keys) is O(n)
+      Leaf{ keys, _ } => Uint32.fromNumber(List.length(unbox(keys))) >= rank,
+      Internal{ keys, _ } =>
+        Uint32.fromNumber(List.length(unbox(keys))) >= rank,
+    }
+  }
+
+  /**
+   * Given a list of keys and a key to search for, returns the index of the child node to follow in an internal node.
+   *
+   * Time Complexity: O(n) where n is the number of keys
+   *
+   * @param keys: The list of keys in the internal node, which should be sorted in ascending order
+   * @param key: The key to search for
+   *
+   * @returns The index of the child node to follow, which is the index of the first key in `keys` that is greater than `key`, or `List.length(keys)` if no such key exists
+   */
+  provide let childIndex = (keys: List<kType>, key: kType) => {
+    let rec childIndexHelp = (keys: List<kType>, key: kType, index) => {
+      match (keys) {
+        [] => index,
+        [k, ..._] when compare(k, key) > 0 => index,
+        [_, ...rest] => childIndexHelp(rest, key, index + 1),
+      }
+    }
+    childIndexHelp(keys, key, 0)
+  }
+
+  /**
+   * Searches for a key in the B+tree starting from the given node.
+   *
+   * Time Complexity: O(log n) where n is the number of keys in the tree
+   *
+   * @param key: The key to search for
+   * @param node: The node to start the search from
+   *
+   * @returns A reference to the leaf node that contains the key, or the leaf node where the key would be if it were present in the tree
+   */
+  provide let rec searchHelp = (key: kType, node: Node<kType, rType>) => {
+    match (node) {
+      Leaf{ _ } => return node,
+      Internal{ keys, children } => {
+        let index = childIndex(unbox(keys), key)
+        // NOTE: This is guaranteed to be in bounds because children is always one entry longer than keys
+        return searchHelp(key, Option.unwrap(List.nth(index, unbox(children))))
+      },
+    }
+  }
+
+  /**
+   * Helper function for the range query, this function iterates through the linked list of leaf nodes
+   * starting from the given keys and values, accumulating values that are in the range [k1, k2]
+   * into the accumulator list.
+   *
+   * Time Complexity: O(m) where m is the number of keys in the range [k1, k2]
+   *
+   * @param k1: The lower bound of the key range
+   * @param k2: The upper bound of the key range
+   * @param keys: The keys in the current leaf node
+   * @param values: The values in the current leaf node, where values[i] corresponds to keys[i]
+   * @param next: The next leaf node in the linked list of leaf nodes
+   * @param acc: The accumulator list that collects values in the range [k1, k2]
+   *
+   * @returns A list of values corresponding to keys in the range [k1, k2]
+   */
+  provide let rec rangeHelp = (
+    k1: kType,
+    k2: kType,
+    keys: List<kType>,
+    values: List<rType>,
+    next: Option<Node<kType, rType>>,
+    acc: List<rType>,
+  ) => {
+    // assert List.length(keys) - 1 == List.length(values)
+    match ((keys, values)) {
+      // Skip anything before k1
+      ([k, ...keys], [v, ...values]) when compare(k, k1) < 0 =>
+        rangeHelp(k1, k2, keys, values, next, acc),
+      // We are going through the keys in the current leaf adding values to the accumulator if their corresponding key is in the range
+      ([k, ...keys], [v, ...values]) when compare(k, k2) <= 0 =>
+        rangeHelp(k1, k2, keys, values, next, [v, ...acc]),
+      // NOTE: This case can only ever be hit when both lists are empty, we can't say that though because the typechecker cannot prove that the lists are always the same length
+      _ => {
+        // If we have a next leaf, we continue the range query on the next leaf, otherwise we return the accumulated values
+        match (next) {
+          Some(Leaf{ keys, values, next }) =>
+            rangeHelp(k1, k2, unbox(keys), unbox(values), unbox(next), acc),
+          _ => acc,
+        }
+      },
+    }
+  }
+
+  /**
+   * Splits a full node into two nodes and promotes the appropriate key to the parent node.
+   *
+   * Time Complexity: O(n) where n is the number of keys in the node being split, since we need to calculate the length of the keys list and split it
+   *
+   * @param node: The node to split, which must be full (i.e., it has the maximum number of keys allowed by the rank of the B+tree)
+   *
+   * @returns `(promotedKey, newNode)` where `promotedKey` is the key that should be promoted to the parent node, and `newNode` is the new node created by the split
+   */
+  provide let split = node => {
+    match (node) {
+      Leaf{ keys: leftKeys_, values: leftValues_, next: leftNext } => {
+        // assert List.length(unbox(leftKeys_)) - 1 == List.length(unbox(leftValues_))
+        let keys = unbox(leftKeys_)
+        let values = unbox(leftValues_)
+        let next = unbox(leftNext)
+        // NOTE: Performance consideration `List.length` is O(n)
+        let count = List.length(keys)
+        // Split the node
+        let mid = Number.floor(count / 2)
+        let (leftKeys, rightKeys) = List.part(mid, keys)
+        let (leftValues, rightValues) = List.part(mid, values)
+        // Create our new right leaf
+        let rightLeaf = Leaf{
+          keys: box(rightKeys),
+          values: box(rightValues),
+          next: box(next),
+        }
+        // Update the left leaf
+        leftKeys_ := leftKeys
+        leftValues_ := leftValues
+        leftNext := Some(rightLeaf)
+        // Return the promoted key and new right leaf
+        // NOTE: We use Option.unwrap here as it is assumed this is only ever called on a full node
+        (Option.unwrap(List.head(rightKeys)), rightLeaf)
+      },
+      Internal{ keys: keys_, children: children_ } => {
+        // assert List.length(unbox(keys_)) - 1 == List.length(unbox(children_))
+        let keys = unbox(keys_)
+        let children = unbox(children_)
+        // NOTE: Performance consideration `List.length` is O(n)
+        let count = List.length(keys)
+        // Split the node
+        let mid = Number.floor(count / 2)
+        let (leftKeys, rightKeys) = List.part(mid, keys)
+        // Take the first key from the right keys to promote, the rest of the right keys will go into the new right internal node
+        let (promotedKey, rightKeys) = match (rightKeys) {
+          [] =>
+            fail "Impossible, rightKeys should always have at least one key because the node is full",
+          [k, ...rest] => (k, rest),
+        }
+        let (leftChildren, rightChildren) = List.part(mid + 1, children)
+        // Create our new right internal node
+        let rightNode = Internal{
+          keys: box(rightKeys),
+          children: box(rightChildren),
+        }
+        // Update the left internal node
+        keys_ := leftKeys
+        children_ := leftChildren
+        // Find our promoted key
+        (promotedKey, rightNode)
+      },
+    }
+  }
+
+  /**
+   * Inserts a key-value pair into the B+tree starting from the given node.
+   *
+   * NOTE: This function assumes that the given node is not full, if the node is full it should be split before calling this function.
+   *
+   * Time Complexity: O(log n) where n is the number of keys in the tree.
+   *
+   * @param rank: The rank of the B+tree, which determines the maximum number of keys in each node
+   * @param key: The key to insert
+   * @param value: The value to associate with the key
+   * @param node: The node to start the insertion from
+   *
+   * @returns `true` if the insertion was successful, `false` if a duplicate key was found and the insertion failed
+   */
+  provide let rec insertHelp = (rank, key, value, node) => {
+    match (node) {
+      Leaf{ keys: keys_, values: values_, _ } => {
+        // assert List.length(unbox(keys_)) == List.length(unbox(values_))
+        let keys = unbox(keys_)
+        let values = unbox(values_)
+        // Get the index where the key should be inserted
+        let index = childIndex(keys, key)
+        // Check if the key already exists in the tree
+        match (List.nth(index, keys)) {
+          // Duplicate key, false to signal failure
+          Some(k) when compare(k, key) == 0 => false,
+          // Otherwise perform insertion
+          _ => {
+            keys_ := List.insert(index, key, keys)
+            values_ := List.insert(index, value, values)
+            // return true to signal success
+            true
+          },
+        }
+      },
+      Internal{ keys: keys_, children: children_ } => {
+        // assert List.length(unbox(keys_)) - 1 == List.length(unbox(children_))
+        let keys = unbox(keys_)
+        let children = unbox(children_)
+        // Find the child to insert on
+        let index = childIndex(keys, key)
+        let child = Option.unwrap(List.nth(index, children))
+
+        // Eagerly split the child on the way down if it is full to ensure that we never have to split on the way back up
+        let (keys, children, nextChild) = if (isNodeFull(rank, child)) {
+          let (kPrime, rightNode) = split(child)
+          // Insert the promoted key and new right node into the current internal node
+          let newKeys = List.insert(index, kPrime, keys)
+          let newChildren = List.insert(index + 1, rightNode, children)
+          // Update the current internal node with the new keys and children
+          keys_ := newKeys
+          children_ := newChildren
+          // Determine which child to follow after the split, we compare the key to be inserted with the promoted key to determine this
+          let nextChild = if (compare(key, kPrime) > 0) rightNode else child
+          (newKeys, newChildren, nextChild)
+        } else {
+          (keys, children, child)
+        }
+        // Tail call insert on the appropriate child
+        insertHelp(rank, key, value, nextChild)
+      },
+    }
+  }
+
+  /**
+   * Given a node, returns the minimum key in the subtree rooted at that node.
+   *
+   * Time Complexity: O(log n) where n is the number of keys in the tree,
+   *                  since we need to traverse down to the leaf level to find the minimum key.
+   *
+   * @param node: The node to find the minimum key of
+   *
+   * @returns The minimum key in the subtree rooted at the given node
+   */
+  provide let rec getMinLeaf = node => {
+    match (node) {
+      Leaf{ keys, _ } as node => node,
+      Internal{ children, _ } => {
+        match (unbox(children)) {
+          [] => fail "Impossible: empty internal node",
+          [child, ..._] => getMinLeaf(child),
+        }
+      },
+    }
+  }
+}
+
+/**
+ * Constructs an empty B+tree with the given rank.
+ *
+ * Time Complexity: O(1)
+ *
+ * @param rank: The rank of the B+tree, which determines the maximum number of keys in each node
+ *
+ * @returns An empty B+tree with the specified rank
+ *
+ * @throws Failure(Message): If the rank is less than 3, since a B+tree of rank less than 3 cannot maintain its properties
+ */
+provide let make = (rank: Uint32) => {
+  use Uint32.{ (<) }
+  if (rank < 3ul) fail "Rank must be at least 3"
+  { rank, root: Leaf{ keys: box([]), values: box([]), next: box(None) } }
+}
+
+/**
+ * Checks if the B+tree is empty, meaning it contains no entries.
+ *
+ * Time Complexity: O(1)
+ *
+ * @param tree: The B+tree to check for emptiness
+ *
+ * @returns `true` if the B+tree is empty, `false` otherwise
+ */
+provide let isEmpty = tree => match (tree.root) {
+  Leaf{ keys, _ } => List.isEmpty(unbox(keys)),
+  Internal{ keys, _ } => List.isEmpty(unbox(keys)),
+}
+
+/**
+ * Retrieves the value associated with a given key in the B+tree.
+ *
+ * Time Complexity: O(log n) where n is the number of keys in the tree
+ *
+ * @param key: The key to search for in the B+tree
+ * @param tree: The B+tree to search within
+ *
+ * @returns `Some(rType)` if the key is found in the tree, `None` if the key is not found
+ */
+provide let search = (key: kType, tree: BPlusTree<kType, rType>) => {
+  let leaf = Internal.searchHelp(key, tree.root)
+  match (leaf) {
+    Leaf{ keys, values, _ } => {
+      // assert List.length(unbox(keys))-1 == List.length(unbox(values))
+      let childIndex = Internal.childIndex(unbox(keys), key) - 1
+      // We check if the key at the childIndex is actually the key, since childIndex just says it should be in this bucket
+      match (List.nth(childIndex, unbox(keys))) {
+        // NOTE: The `Option.unwrap` is safe here because of the property that values is always the same length as keys
+        Some(k) when compare(k, key) == 0 =>
+          return Some(Option.unwrap(List.nth(childIndex, unbox(values)))),
+        /*
+         * This case can happen under two conditions:
+         * 1. `childIndex == List.length(keys)`, which means that no bucket for the key exists.
+         * 2. `k != key`, which means that the bucket that should contain the key does not actually contain the key.
+         * In either case, we can conclude that the key is not present in the tree and return `None`.
+         */
+        _ => return None,
+      }
+    },
+    _ => fail "Impossible, searchHelp should only return leaf nodes",
+  }
+}
+
+/**
+ * Retrieves a list of values associated with keys in the range [k1, k2] in the B+tree.
+ *
+ * Time Complexity: O(log n + m) where n is the number of keys in the tree and m is the number of keys in the range [k1, k2]
+ *
+ * @param k1: The lower bound of the key range
+ * @param k2: The upper bound of the key range
+ * @param tree: The B+tree to search within
+ *
+ * @returns A list of values corresponding to keys in the range [k1, k2]
+ */
+provide let range = (k1: kType, k2: kType, tree: BPlusTree<kType, rType>) => {
+  // We get the leaf node that contains our starting values by searching for k1
+  // We then iterate through the linked list of leaf nodes by following next
+  // - If this is the first leaf (all values should be considered all values greater than k1)
+  //   - If the last key in the leaf is less than k2
+  //     - We add all values from this leaf and move the next leaf
+  //   - Otherwise, we add all values from this leaf that are less than k2 and stop iterating
+  // NOTE: The implementation above is optimized for vectors, on a linked list we are best just scanning through all values
+  let leaf = Internal.searchHelp(k1, tree.root)
+  match (leaf) {
+    Leaf{ keys, values, next } =>
+      // NOTE: The list.reverse is done because we are accumulating the values in reverse order for efficiency, we avoid this by scanning from k2 to k1 instead of k1 to k2 but that would be less intuitive
+      List.reverse(
+        Internal.rangeHelp(k1, k2, unbox(keys), unbox(values), unbox(next), [])
+      ),
+    _ => fail "Impossible, searchHelp should only return leaf nodes",
+  }
+}
+
+/**
+ * Inserts a new entry into the B+tree.
+ *
+ * Time Complexity: O(log n) where n is the number of keys in the tree.
+ *
+ * @param key: The key to insert into the B+tree
+ * @param value: The value to associate with the key in the B+tree
+ * @param tree: The B+tree to insert the record into
+ *
+ * @throws DuplicateKey: If a duplicate key is used, since B+trees do not allow duplicate keys
+ */
+provide let insert = (key: kType, value: rType, tree: BPlusTree<kType, rType>) => {
+  // We eagerly split on the way down to ensure that we never have to split on the way back up
+  if (Internal.isNodeFull(tree.rank, tree.root)) {
+    let (kPrime, rightNode) = Internal.split(tree.root)
+    tree.root = Internal{
+      keys: box([kPrime]),
+      children: box([tree.root, rightNode]),
+    }
+  }
+  // Perform the actual insertion, `false` indicates a duplicate key was found and the insertion failed.
+  if (!Internal.insertHelp(tree.rank, key, value, tree.root)) {
+    throw DuplicateKey
+  }
+  void
+}
+
+/**
+ * Performs a bulk insert of a list of records into the B+tree.
+ * This is more efficient than inserting each record individually, since we can build the tree in a bottom-up manner.
+ *
+ * Time Complexity: O(n) in the sorted case, O(n log n) in the unsorted case due to the initial sort
+ *
+ * @param records: The list of records to insert into the B+tree, where each record is a tuple of (key, value)
+ * @param tree: The B+tree to insert the records into, which must be empty (i.e., it must not contain any entries)
+ *
+ * @throws DuplicateKey: If a duplicate key is found in the list of records, since B+trees do not allow duplicate keys
+ */
+provide let bulkInsert = (
+  records: List<(kType, rType)>,
+  tree: BPlusTree<kType, rType>,
+) => {
+  if (List.isEmpty(records)) return
+  // A little function that collects `n` items from a list - O(n) where n is the number of items to collect
+  // NOTE: An accumulator is used to make it tail recursive
+  let rec collect = (nodes, acc, n) => {
+    match (nodes) {
+      [a, ...rest] when n > 0 => collect(rest, [a, ...acc], n - 1),
+      _ => (List.reverse(acc), nodes),
+    }
+  }
+  // bulk insert only works on an empty tree, we can enforce this precondition to simplify the implementation significantly
+  // NOTE: If we wanted to insert into an existing tree its pretty easy if the rank is the same however if its greater
+  //       we would have to merge the nodes into existing leaves. If it was smaller we would have to divide up leaves
+  //       In either case we would have to do a lot of node manipulation which is not worth the implementation complexity.
+  assert isEmpty(tree) // o(1)
+  // --- Sort records o(n log n)---
+  let records = List.sort(
+    compare=((k1, _), (k2, _)) => compare(k1, k2),
+    records
+  )
+  // --- Check duplicates o(n) ---
+  // NOTE: We could do this inline to be more efficient in terms of actual performance
+  //       but this is more clear and the time complexity is still O(n)
+  let mut curr = records
+  while (!List.isEmpty(curr)) {
+    match (curr) {
+      [(k1, _), (k2, _), ...rest] when compare(k1, k2) == 0 =>
+        throw DuplicateKey,
+      [_, ...rest] => curr = rest,
+      [] => break,
+    }
+  }
+  // --- Build the tree O(n) ---
+  let rec buildLeaves = (lst, acc) => {
+    match (lst) {
+      // done collecting leaves
+      [] => List.reverse(acc),
+      _ => {
+        // take `rank` elements from lst for a new leaf
+        let (chunk, rest) = collect(lst, [], Uint32.toNumber(tree.rank) - 1)
+        let (keys, values) = List.unzip(chunk)
+        // Create leaf
+        let leaf = Leaf{ keys: box(keys), values: box(values), next: box(None) }
+        let firstKey = match (keys) {
+          [] => None,
+          [k, ..._] => Some(k),
+        }
+        // link previous leaf to this one
+        match (acc) {
+          // NOTE: This Option.unwrap is safe because we are guaranteed to have at least 1 key
+          [] => buildLeaves(rest, [(firstKey, leaf)]),
+          [(_, Leaf{ next, _ }) as prev, ...others] => {
+            next := Some(leaf)
+            buildLeaves(rest, [(firstKey, leaf), prev, ...others])
+          },
+          [(_, Internal{ _ }), ..._] =>
+            fail "Impossible, we should only have leaf nodes in the accumulator at this point",
+        }
+      },
+    }
+  }
+  // NOTE: There should be k leaf nodes where k is ceil(length(records)/rank
+  let mut nodes = buildLeaves(records, [])
+  // --- Build the levels and tree O(n) ---
+  let rec buildTree = (nodes: List<(Option<kType>, Node<kType, rType>)>) => {
+    // base case: single node → root
+    match (nodes) {
+      [] => fail "Impossible, there should always be at least one node",
+      [(_, node)] => node,
+      [_, ..._] => {
+        let rec buildLevel = nodes => {
+          if (List.isEmpty(nodes)) return []
+          // take `rank` nodes to form a new internal node, the keys of the internal node are the minimum keys of each child node (except the first one since it is the separator key for the previous internal node)
+          let (chunk, rest) = collect(nodes, [], Uint32.toNumber(tree.rank) - 1)
+          // We filterMap here because there is a case where the last interval node might not need keys
+          let keys = List.filterMap(((k, c)) => k, chunk)
+          // NOTE: we take the lowest key and path it up as the separator key
+          let firstKey = match (keys) {
+            [] => None,
+            [k, ..._] => Some(k),
+          }
+          // extract separator keys (skip first child)
+          let keys = match (keys) {
+            [_, ...restKeys] => restKeys,
+            // Skip the first key since it is the separator key
+            [] | [_] => [],
+          }
+          let internal = Internal{
+            keys: box(keys),
+            children: box(List.map(((_, c)) => c, chunk)),
+          }
+          return [(firstKey, internal), ...buildLevel(rest)]
+        }
+        // build next level and recurse upward
+        buildTree(buildLevel(nodes))
+      },
+    }
+  }
+  // 4. Set the root
+  tree.root = buildTree(nodes)
+  return
+}
+
+// Helpers for grain only - note: This is o(index) so not super efficient
+let listRemove = (index, lst) =>
+  List.append(List.take(index, lst), List.drop(index + 1, lst))
+
+/**
+ * Deletes an entry from the B+tree.
+ *
+ * Time Complexity: O(log n) where n is the number of keys in the tree
+ *
+ * @param key: The key to remove from the B+tree
+ * @param tree: The B+tree to delete the key from
+ *
+ * @returns `true` if the entry was removed, `false` if the key does not exist
+ */
+provide let delete = (key: kType, tree: BPlusTree<kType, rType>) => {
+  let maxKeys = Uint32.toNumber(tree.rank) - 1
+  let minKeys = isRootNode => if (isRootNode) 0 else Number.floor(maxKeys / 2)
+
+  let keyCount = node => match (node) {
+    Leaf{ keys, _ } => List.length(unbox(keys)),
+    Internal{ keys, _ } => List.length(unbox(keys)),
+  }
+
+  let rec splitLast = lst => match (lst) {
+    [] => fail "Impossible: splitLast on empty list",
+    [x] => ([], x),
+    [x, ...rest] => {
+      let (init, last) = splitLast(rest)
+      ([x, ...init], last)
+    },
+  }
+
+  let rec leftmostLeafKey = node => {
+    match (node) {
+      Leaf{ keys, _ } => List.head(unbox(keys)),
+      Internal{ children, _ } => match (unbox(children)) {
+        [] => None,
+        [child, ..._] => leftmostLeafKey(child),
+      },
+    }
+  }
+
+  let syncInternalKeys = node => match (node) {
+    Internal{ keys, children } => {
+      let rightChilren = match (unbox(children)) {
+        [] => [],
+        [_, ...rest] => rest,
+      }
+      keys := List.filterMap(leftmostLeafKey, rightChilren)
+    },
+    Leaf{ _ } => void,
+  }
+
+  let rec rebalanceChildAt = (parentNode, childIndex) => match (parentNode) {
+    Leaf{ _ } => fail "Impossible: parent node must be internal",
+    Internal{ keys, children } => {
+      let parentChildren = unbox(children)
+      let child = Option.unwrap(List.nth(childIndex, parentChildren))
+
+      // Borrow from left if possible.
+      if (childIndex > 0) {
+        let left = Option.unwrap(List.nth(childIndex - 1, parentChildren))
+        match ((left, child)) {
+          (
+            Leaf{ keys: leftKeys, values: leftValues, _ },
+            Leaf{ keys: childKeys, values: childValues, _ },
+          ) when List.length(unbox(leftKeys)) > Number.floor(maxKeys / 2) => {
+            let (newLeftKeys, borrowedKey) = splitLast(unbox(leftKeys))
+            let (newLeftValues, borrowedValue) = splitLast(unbox(leftValues))
+            leftKeys := newLeftKeys
+            leftValues := newLeftValues
+            childKeys := [borrowedKey, ...unbox(childKeys)]
+            childValues := [borrowedValue, ...unbox(childValues)]
+
+            syncInternalKeys(parentNode)
+            return
+          },
+          (
+            Internal{ children: leftChildren, _ },
+            Internal{ children: childChildren, _ },
+          ) when keyCount(left) > Number.floor(maxKeys / 2) => {
+            let (newLeftChildren, borrowedChild) = splitLast(
+              unbox(leftChildren)
+            )
+            leftChildren := newLeftChildren
+            childChildren := [borrowedChild, ...unbox(childChildren)]
+            syncInternalKeys(left)
+            syncInternalKeys(child)
+
+            syncInternalKeys(parentNode)
+            return
+          },
+          _ => void,
+        }
+      }
+
+      // Borrow from right if possible.
+      if (childIndex + 1 < List.length(parentChildren)) {
+        let right = Option.unwrap(List.nth(childIndex + 1, parentChildren))
+        match ((child, right)) {
+          (
+            Leaf{ keys: childKeys, values: childValues, _ },
+            Leaf{ keys: rightKeys, values: rightValues, _ },
+          ) when List.length(unbox(rightKeys)) > Number.floor(maxKeys / 2) => {
+            let (borrowedKey, newRightKeys) = match (unbox(rightKeys)) {
+              [] => fail "Impossible: right sibling has no keys",
+              [k, ...rest] => (k, rest),
+            }
+            let (borrowedValue, newRightValues) = match (unbox(rightValues)) {
+              [] => fail "Impossible: right sibling has no values",
+              [v, ...rest] => (v, rest),
+            }
+            rightKeys := newRightKeys
+            rightValues := newRightValues
+            childKeys := List.append(unbox(childKeys), [borrowedKey])
+            childValues := List.append(unbox(childValues), [borrowedValue])
+
+            syncInternalKeys(parentNode)
+            return
+          },
+          (
+            Internal{ children: childChildren, _ },
+            Internal{ children: rightChildren, _ },
+          ) when keyCount(right) > Number.floor(maxKeys / 2) => {
+            let (borrowedChild, newRightChildren) = match (unbox(rightChildren)) {
+              [] => fail "Impossible: right sibling has no children",
+              [x, ...rest] => (x, rest),
+            }
+            rightChildren := newRightChildren
+            childChildren := List.append(unbox(childChildren), [borrowedChild])
+            syncInternalKeys(right)
+            syncInternalKeys(child)
+
+            syncInternalKeys(parentNode)
+            return
+          },
+          _ => void,
+        }
+      }
+
+      // Merge if neither sibling can lend
+      if (childIndex > 0) {
+        let left = Option.unwrap(List.nth(childIndex - 1, parentChildren))
+        match ((left, child)) {
+          (
+            Leaf{ keys: leftKeys, values: leftValues, next: leftNext },
+            Leaf{ keys: childKeys, values: childValues, next: childNext },
+          ) => {
+            leftKeys := List.append(unbox(leftKeys), unbox(childKeys))
+            leftValues := List.append(unbox(leftValues), unbox(childValues))
+            // Keep the linked-list of leaves intact by skipping removed child.
+            leftNext := unbox(childNext)
+          },
+          (
+            Internal{ children: leftChildren, _ },
+            Internal{ children: childChildren, _ },
+          ) => {
+            leftChildren := List.append(
+              unbox(leftChildren),
+              unbox(childChildren)
+            )
+            syncInternalKeys(left)
+          },
+          _ => fail "Impossible: sibling node types must match",
+        }
+        children := listRemove(childIndex, parentChildren)
+      } else if (childIndex + 1 < List.length(parentChildren)) {
+        let right = Option.unwrap(List.nth(childIndex + 1, parentChildren))
+        match ((child, right)) {
+          (
+            Leaf{ keys: childKeys, values: childValues, next: childNext },
+            Leaf{ keys: rightKeys, values: rightValues, next: rightNext },
+          ) => {
+            childKeys := List.append(unbox(childKeys), unbox(rightKeys))
+            childValues := List.append(unbox(childValues), unbox(rightValues))
+            // Keep the linked-list of leaves intact by skipping removed sibling.
+            childNext := unbox(rightNext)
+          },
+          (
+            Internal{ children: childChildren, _ },
+            Internal{ children: rightChildren, _ },
+          ) => {
+            childChildren := List.append(
+              unbox(childChildren),
+              unbox(rightChildren)
+            )
+            syncInternalKeys(child)
+          },
+          _ => fail "Impossible: sibling node types must match",
+        }
+        children := listRemove(childIndex + 1, parentChildren)
+      } else {
+        return
+      }
+      syncInternalKeys(parentNode)
+      return
+    },
+  }
+
+  let rec deleteHelp = (node: Node<kType, rType>, isRootNode) => match (node) {
+    Leaf{ keys, values, _ } => {
+      let keyList = unbox(keys)
+      let index = Internal.childIndex(keyList, key) - 1
+      let deleted = match (List.nth(index, keyList)) {
+        Some(k) when compare(k, key) == 0 => {
+          keys := listRemove(index, keyList)
+          values := listRemove(index, unbox(values))
+          true
+        },
+        _ => false,
+      }
+      let underflow = deleted && keyCount(node) < minKeys(isRootNode)
+      return (deleted, underflow)
+    },
+    Internal{ keys, children } => {
+      let index = Internal.childIndex(unbox(keys), key)
+      let child = Option.unwrap(List.nth(index, unbox(children)))
+      let (deleted, childUnderflow) = deleteHelp(child, false)
+      if (!deleted) return (false, false)
+      if (childUnderflow) {
+        rebalanceChildAt(node, index)
+      } else {
+        syncInternalKeys(node)
+      }
+      let underflow = keyCount(node) < minKeys(isRootNode)
+      return (true, underflow)
+    },
+  }
+
+  let (deleted, _) = deleteHelp(tree.root, true)
+  if (!deleted) return false
+
+  // Root can have fewer keys than other nodes
+  let rec normalize = () => match (tree.root) {
+    Internal{ children, _ } => match (unbox(children)) {
+      [onlyChild] => {
+        tree.root = onlyChild
+        normalize()
+      },
+      _ => void,
+    },
+    Leaf{ _ } => void,
+  }
+  normalize()
+  return true
+}
+
+/**
+ * Merges two B+trees into a single B+tree containing all the entries from both trees.
+ *
+ * NOTE: The new tree will have the same rank as `tree1`
+ *
+ * Time Complexity: O(n + m) note that this is only the optimal time complexity if entires from both trees interleave a lot is worse because we have todo a lot of sorting, we could sort faster but its not worth it.
+ *
+ * @param tree1: The first B+tree to merge
+ * @param tree2: The second B+tree to merge
+ *
+ * @returns A new B+tree containing all the entries from both input trees
+ */
+provide let merge = (
+  tree1: BPlusTree<kType, rType>,
+  tree2: BPlusTree<kType, rType>,
+) => {
+  // NOTE: We could optimize this if both trees have the same rank by just zipping the nodes up the tree but in any other case its much easier to just do a bulk insert into an empty tree.
+  let newTree = make(tree1.rank)
+  // Collect all the entires
+  let rec collect = (leaf, acc) => {
+    match (leaf) {
+      Leaf{ keys, values, next } => {
+        let entries = List.zip(unbox(keys), unbox(values))
+        let acc = List.append(acc, entries)
+        match (unbox(next)) {
+          Some(nextLeaf) => collect(nextLeaf, acc),
+          None => acc,
+        }
+      },
+      // Given this is only called with leaf.next we should never hit this invariant
+      Internal{ _ } =>
+        fail "Impossible: Collect should not be called on internal nodes",
+    }
+  }
+  let entries1 = collect(Internal.getMinLeaf(tree1.root), []) // o(n)
+  let entries2 = collect(Internal.getMinLeaf(tree2.root), []) // o(n)
+  let entires = List.append(entries1, entries2) // o(n + m)
+  // NOTE: This is o(n log n) but we could do better knowing that both lists are already sorted.
+  //       It doesn't really make sense to optimize this furthur for our use case but in a real implementation we would want to.
+  let entries = List.sort(
+    compare=((k1, _), (k2, _)) => compare(k1, k2),
+    entires
+  )
+  bulkInsert(entires, newTree) // o(n + m)
+  newTree
+}
+
+/**
+ * Constructs a B+tree from a list of records.
+ *
+ * TODO: Determine timeComplexity based off bulkInsert
+ *
+ * @param rank: The rank of the B+tree to construct
+ * @param list: The list of records to insert into the B+tree
+ *
+ * @returns A B+tree containing all the records from the list
+ *
+ * @throws DuplicateKey: If a duplicate key is found in the list
+ */
+provide let fromList = (rank: Uint32, list: List<(kType, rType)>) => {
+  let tree = make(rank)
+  bulkInsert(list, tree)
+  tree
+}
+
+/**
+ * This submodule provides functionality to visualize the structure of the B+tree.
+ */
+provide module Visualize {
+  // Mermaid syntax reference: https://mermaid.js.org/
+
+  // Generates a unique ID for each node based on its keys, this is used to identify nodes in a graph
+  let getGraphId = node => {
+    match (node) {
+      Leaf{ keys, _ } =>
+        "leaf_" ++ List.join("_", List.map(toString, unbox(keys))),
+      Internal{ keys, _ } =>
+        "node_" ++ List.join("_", List.map(toString, unbox(keys))),
+    }
+  }
+
+  let getGraphLabel = node => {
+    match (node) {
+      Leaf{ keys, _ } =>
+        "Leaf(" ++ List.join(",", List.map(toString, unbox(keys))) ++ ")",
+      Internal{ keys, _ } =>
+        "Internal(" ++ List.join(",", List.map(toString, unbox(keys))) ++ ")",
+    }
+  }
+
+  /**
+   * Generates a Mermaid graph representation of the B+tree, which can be used to visualize the structure of the tree.
+   *
+   * Time Complexity: O(n) where n is the number of nodes in the tree, since we need to visit each node once to generate the graph
+   *
+   * @param tree: The B+tree to visualize
+   *
+   * @returns A string containing the Mermaid graph representation of the B+tree
+   */
+  provide let toMermaid = tree => {
+    let rec toMermaidHelp = (buf, node) => {
+      let label = getGraphLabel(node)
+      let id = getGraphId(node)
+      match (node) {
+        Leaf{ keys, values, next } => {
+          // Add the current leaf node
+          Buffer.addString("%% Leaf\n", buf)
+          Buffer.addString(id ++ "[\"" ++ label ++ "\"]\n", buf)
+          // Optionally add link to next leaf
+          match (unbox(next)) {
+            Some(nextNode) => {
+              Buffer.addString(
+                id ++ " --> " ++ getGraphId(nextNode) ++ "\n",
+                buf
+              )
+            },
+            None => void,
+          }
+        },
+        Internal{ keys, children } => {
+          // Add the current internal node
+          Buffer.addString("%% Node\n", buf)
+          Buffer.addString(id ++ "[\"" ++ label ++ "\"]\n", buf)
+          // Add the links to the children
+          List.forEachi((child, i) => {
+            let childId = getGraphId(child)
+            Buffer.addString(id ++ " --> " ++ childId ++ "\n", buf)
+            toMermaidHelp(buf, child)
+          }, unbox(children))
+        },
+      }
+    }
+    let buf = Buffer.make(16)
+    Buffer.addString("graph TD\n", buf)
+    toMermaidHelp(buf, tree.root)
+    Buffer.toString(buf)
+  }
+
+  /**
+   * Generates a GraphViz graph representation of the B+tree, which can be used to visualize the structure of the tree.
+   *
+   * Time Complexity: O(n) where n is the number of nodes in the tree, since we need to visit each node once to generate the graph
+   *
+   * @param tree: The B+tree to visualize
+   *
+   * @returns A string containing the GraphViz graph representation of the B+tree
+   */
+  provide let toDot = tree => {
+    let rec toDotHelp = (buf, node, leafBuffer) => {
+      let label = getGraphLabel(node)
+      let id = getGraphId(node)
+      match (node) {
+        Leaf{ keys, values, next } => {
+          // Add the current leaf node
+          Buffer.addString(id ++ " [label=\"" ++ label ++ "\"]\n", buf)
+          // Add next leaf links to leafBuffer to handle horizontal layout later
+          match (unbox(next)) {
+            Some(nextNode) => {
+              Buffer.addString(
+                id ++ " -> " ++ getGraphId(nextNode) ++ " [style=dashed];\n",
+                leafBuffer
+              )
+            },
+            None => void,
+          }
+        },
+        Internal{ keys, children } => {
+          // Add the internal node
+          Buffer.addString(id ++ " [label=\"" ++ label ++ "\"]\n", buf)
+          // Add the child links
+          List.forEachi((child, i) => {
+            Buffer.addString(id ++ " -> " ++ getGraphId(child) ++ ";\n", buf)
+            toDotHelp(buf, child, leafBuffer)
+          }, unbox(children))
+        },
+      }
+    }
+    let buf = Buffer.make(16)
+    let leafBuf = Buffer.make(16)
+    Buffer.addString("digraph BPlusTree {\n", buf)
+    Buffer.addString("  node [shape=box];\n", buf)
+    toDotHelp(buf, tree.root, leafBuf)
+    // Put all leaf links in same rank subgraph for horizontal layout
+    Buffer.addString("  subgraph leaves {\n    rank=same;\n", buf)
+    Buffer.addString(Buffer.toString(leafBuf), buf)
+    Buffer.addString("  }\n", buf)
+    Buffer.addString("}\n", buf)
+    Buffer.toString(buf)
+  }
+}
+
+// Implement a Key class that inherits from IComparable
+
+// Implement a record class that includes data members for the key and other values

@@ -4,16 +4,28 @@ using System.Collections.Generic;
 using System.Linq;
 using BPlusTree;
 
-#nullable enable
-
 namespace A3Tests;
 
 [TestClass]
 public class BPlusTreeTests {
   // Test Helpers
   private static class Helpers {
+    /// <summary>
+    /// Helper function to build a basic BPlusTree with int keys and string values used commonly throughout testing.
+    /// </summary>
+    /// <param name="rank">The rank of the tree.</param>
+    /// <returns>The built BPlusTree.</returns>
     public static BPlusTree<int, string> BuildRankIntStringTree(int rank) => new BPlusTree<int, string>(rank);
+    /// <summary>
+    /// Helper function to build a record with int key and a string value where the value is a string representation of the key.
+    /// </summary>
+    /// <param name="key">The key for the record.</param>
+    /// <returns>The built record.</returns>
     public static Record<int, string> IntStringRecord(int key) => new Record<int, string>(key, key.ToString());
+    /// <summary>Helper function making search a bit more convenient for testing.</summary>
+    /// <param name="tree">The tree to search in.</param>
+    /// <param name="key">The key to search for.</param>
+    /// <returns>The record if found, otherwise null.</returns>
     public static Record<TKey, TValue>? Search<TKey, TValue>(BPlusTree<TKey, TValue> tree, TKey key) where TKey : IComparable<TKey> {
       Record<TKey, TValue>? result = null;
       if (tree.Search(key, ref result)) return result;
@@ -23,6 +35,7 @@ public class BPlusTreeTests {
   #region Constructor tests
   // NOTE: We just do smoke tests to make sure that constructing a tree with various ranks works.
   //       Behavior will be verified more thoroughly when we test other functions.
+  //       The decision to use smoke test was made as we can't inspect the private structure of the tree to verify it.
   [TestMethod]
   public void ConstructSmallTree1() => Assert.IsNotNull(Helpers.BuildRankIntStringTree(3));
   [TestMethod]
@@ -41,7 +54,7 @@ public class BPlusTreeTests {
   [TestMethod]
   public void InsertAndSearchWithOrderedData() {
     var tree = Helpers.BuildRankIntStringTree(3);
-    // We test random data to make sure that sorted vs non sorted has no difference
+    // We test ordered data to make sure that sorted vs non sorted has no difference
     var data = Enumerable.Range(0, 10).ToArray();
     // Ensure that we are not throwing
     foreach (var x in data) tree.Insert(new Record<int, string>(x, x.ToString()));
@@ -62,8 +75,8 @@ public class BPlusTreeTests {
   }
   [TestMethod]
   public void InsertAndSearchWithLargeData() {
-    var tree = Helpers.BuildRankIntStringTree(3);
-    // We test random data to make sure that sorted vs non sorted has no difference
+    var tree = Helpers.BuildRankIntStringTree(4);
+    // We test with a large amount of data to ensure that our implementation can handle larger loads.
     var data = Enumerable.Range(0, 100_000).ToArray();
     // Ensure that we are not throwing
     foreach (var x in data) tree.Insert(Helpers.IntStringRecord(x));
@@ -72,9 +85,10 @@ public class BPlusTreeTests {
     }
   }
   [TestMethod]
-  public void InsertAndSearchOnDifferentTree() {
+  public void InsertAndSearchOnDifferentDataTypeTree() {
+    // We test on a different data type to ensure that semantics aren't related to int keys or string values
     var tree = new BPlusTree<char, char>(3);
-    // We test random data to make sure that sorted vs non sorted has no difference
+    // Generate data from a-z
     var data = Enumerable.Range('a', 'z').ToArray();
     // Ensure that we are not throwing
     foreach (var x in data) tree.Insert(new Record<char, char>((char)x, (char)x));
@@ -182,6 +196,7 @@ public class BPlusTreeTests {
   [TestMethod]
   public void BulkInsertRandomOrder() {
     var tree = Helpers.BuildRankIntStringTree(3);
+    // Ensure that the tree is being built correctly this could catch a case where we aren't sorting
     var data = new[] { 8, 3, 10, 1, 6, 9, 11, 2, 5, 7 };
     tree.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
     foreach (var x in data) {
@@ -190,6 +205,7 @@ public class BPlusTreeTests {
   }
   [TestMethod]
   public void BulkInsertSortedOrder() {
+    // Similar test to our insert sorted
     var tree = Helpers.BuildRankIntStringTree(3);
     var data = Enumerable.Range(1, 20).ToList();
     tree.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
@@ -199,7 +215,8 @@ public class BPlusTreeTests {
   }
   [TestMethod]
   public void BulkInsertLarge() {
-    var tree = Helpers.BuildRankIntStringTree(3);
+    // Similar test to our insert large
+    var tree = Helpers.BuildRankIntStringTree(4);
     var data = Enumerable.Range(1, 100_000).ToList();
     tree.BulkInsert(data.Select(x => Helpers.IntStringRecord(x)));
     foreach (var x in data) {
@@ -208,6 +225,7 @@ public class BPlusTreeTests {
   }
   [TestMethod]
   public void BulkInsertStringKeys() {
+    // Similar test to our different data type test for insert but for bulk insert
     var tree = new BPlusTree<string, string>(3);
     var data = Enumerable.Range(1, 20).Select(i => i.ToString()).ToList();
     tree.BulkInsert(data.Select(x => new Record<string, string>(x, x)));
@@ -230,6 +248,7 @@ public class BPlusTreeTests {
   public void BulkInsertDuplicateKeys2() {
     // We also test duplicate keys unordered
     var tree = Helpers.BuildRankIntStringTree(3);
+    // This would catch a mistake in our duplicate check algorithm where we only check adjacent keys for duplicates
     Assert.Throws<DuplicateKeyException>(() => tree.BulkInsert(new[] { Helpers.IntStringRecord(1), Helpers.IntStringRecord(2), Helpers.IntStringRecord(3), Helpers.IntStringRecord(5), Helpers.IntStringRecord(1) }));
   }
   [TestMethod]
@@ -265,6 +284,7 @@ public class BPlusTreeTests {
       Assert.IsTrue(tree.Delete(x.Key), $"Delete({x.Key}) should return true.");
       Assert.IsNull(Helpers.Search(tree, x.Key), $"Key {x.Key} should not exist after delete.");
     }
+    // Here is that `IsEmpty` test we mentioned above
     Assert.IsTrue(tree.IsEmpty);
   }
   [TestMethod]
@@ -287,6 +307,7 @@ public class BPlusTreeTests {
     Assert.AreEqual("7", Helpers.Search(tree, 7)?.Value, $"Key 7 should be found with correct value after delete and reinsert.");
   }
   // Rebalance testing
+  // NOTE: These tests are somewhat implementation dependent, a better way might be to snapshot test these but it felt overcomplicated for this assignment. These tests would still catch any notable edge cases but their rank dependent which means if the rank we use were to change we would need to update the tests and it wouldn't be clear that we are no longer testing what we say.
   [TestMethod]
   public void DeleteUnderflowAtLeftmostLeafBorrowsFromRight() {
     // Deleting from the leftmost leaf causes underflow; tree should borrow from the right sibling.
@@ -411,6 +432,11 @@ public class BPlusTreeTests {
   #region Rank stress tests
   [TestMethod]
   public void InsertSearchDeleteMultipleRanksRandomizedData() {
+    // NOTE: This is really just to catch any invariant that we may not have already caught with the above tests.
+    //       Real failures tend to surface on the specific tests but a stress test is good to catch subtle bugs 
+    //       like maybe delete fails after a certain rank or specific load, the idea is if a failure surfaces here 
+    //       we treat it as a regression and add a new specific test for a similar or the same case to make sure we 
+    //       catch it in the future.
     foreach (var rank in new[] { 3, 4, 20 }) {
       var tree = Helpers.BuildRankIntStringTree(rank);
       // NOTE: We use guid because they are unique and random

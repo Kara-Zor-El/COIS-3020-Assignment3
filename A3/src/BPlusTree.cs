@@ -4,17 +4,21 @@ using System.Linq;
 
 namespace BPlusTree;
 
+/// <summary>The methods required by the assignment.</summary>
+public interface IBPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
+  public void Insert(Record<TKey, TValue> entry);
+  public bool Delete(TKey key);
 #nullable enable
-
-/// <summary>
-/// Exception thrown when a duplicate key is inserted into the tree
-/// </summary>
-public class DuplicateKeyException : Exception {
-  /// <summary>
-  /// Creates a new DuplicateKeyException
-  /// </summary>
-  public DuplicateKeyException() : base("Duplicate key inserted into B+ tree") { }
+  public bool Search(TKey key, ref Record<TKey, TValue>? outValue);
+#nullable disable
+  public void BulkInsert(IEnumerable<Record<TKey, TValue>> entries);
+  public List<Record<TKey, TValue>> Range(TKey key1, TKey key2);
+  public BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> tree);
 }
+
+/// <summary>An exception to be thrown when a key is inserted that is already in the tree.</summary>
+/// <param name="key">The duplicate key that we were attempting to insert</param>
+public class DuplicateKeyException(string key) : Exception($"Duplicate key `{key}` inserted into B+ tree") { }
 
 /// <summary>
 /// A B+tree data structure.
@@ -24,11 +28,11 @@ public class DuplicateKeyException : Exception {
 /// In a B+tree, all values are stored in the leaf nodes, and the internal nodes only store keys
 /// to guide the search process.
 ///
-/// <see href="https://en.wikipedia.org/wiki/B%2B_tree">B+ tree</see>
+/// See <see href="https://en.wikipedia.org/wiki/B%2B_tree">B+ tree wiki</see> for more information.
 /// </summary>
 /// <typeparam name="TKey">The type of the keys in the tree</typeparam>
 /// <typeparam name="TValue">The type of the values in the tree</typeparam>
-public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
+public class BPlusTree<TKey, TValue> : IBPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   // NOTE: For all assignments done for 3020, we started by writing the code in Grain
   // and then ported our implementation to C#.
   // Below is a much more elegant understanding of what the tree structure should look like.
@@ -68,23 +72,22 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     /// </summary>
     /// <returns>A tuple containing the promoted key and the right node</returns>
     public abstract (TKey promotedKey, Node rightNode) Split();
-    /// <summary>
-    /// Finds the index of the key in the list of keys
-    /// </summary>
+    /// <summary>Finds the index of the key in the list of keys.</summary>
     /// <param name="key">The key to find</param>
     /// <returns>The index of the key in the list of keys</returns>
     public abstract int ChildIndex(TKey key);
   }
-  /// <summary>
-  /// A leaf node in the B+ tree.
-  /// </summary>
+  /// <summary>A leaf node in the B+ tree.</summary>
   /// <param name="Keys">The keys in the leaf node</param>
   /// <param name="Values">The values in the leaf node</param>
   /// <param name="Next">The next leaf node in the linked list of leaves</param>
-  private class LeafNode(List<TKey> Keys, List<Record<TKey, TValue>> Values, LeafNode? Next) : Node {
-    public List<TKey> Keys = Keys;
-    public List<Record<TKey, TValue>> Values = Values;
+#nullable enable
+  private class LeafNode(IEnumerable<TKey> Keys, IEnumerable<Record<TKey, TValue>> Values, LeafNode? Next) : Node {
+    public List<TKey> Keys = Keys.ToList();
+    public List<Record<TKey, TValue>> Values = Values.ToList();
     public LeafNode? Next = Next;
+#nullable disable
+    // Public interface
     public override int Length => this.Keys.Count;
     public override bool IsNodeFull(int rank) => this.Length >= rank - 1;
     public override (TKey promotedKey, Node rightNode) Split() {
@@ -95,7 +98,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       var rightValues = this.Values.GetRange(mid, this.Length - mid); // O(1)
       var leftKeys = this.Keys.GetRange(0, mid); // O(1)
       var leftValues = this.Values.GetRange(0, mid); // O(1)
-      // Create our new right node
+                                                     // Create our new right node
       var rightLeaf = new LeafNode(rightKeys, rightValues, this.Next);
       // Set the node to be the left node
       this.Keys = leftKeys;
@@ -105,21 +108,20 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       return (rightLeaf.Keys[0], rightLeaf);
     }
     public override int ChildIndex(TKey key) {
+      // NOTE: This is currently `o(n)`, we could make this `o(log n)` with a binary search.
       for (int i = 0; i < this.Keys.Count; i++) {
         if (this.Keys[i].CompareTo(key) > 0) return i;
       }
       return this.Keys.Count;
     }
   }
-  /// <summary>
-  /// An internal node in the B+ tree.
-  /// </summary>
+  /// <summary>An internal node in the B+ tree.</summary>
   /// <param name="Keys">The keys in the internal node</param>
   /// <param name="Children">The children of the internal node</param>
-  private class InternalNode(List<TKey> Keys, List<Node> Children) : Node {
-    public List<TKey> Keys = Keys;
-    public List<Node> Children = Children;
-
+  private class InternalNode(IEnumerable<TKey> Keys, IEnumerable<Node> Children) : Node {
+    public List<TKey> Keys = Keys.ToList();
+    public List<Node> Children = Children.ToList();
+    // Public interface
     public override int Length => this.Keys.Count;
     public override bool IsNodeFull(int rank) => this.Length >= rank - 1;
     public override (TKey promotedKey, Node rightNode) Split() {
@@ -140,6 +142,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       return (promotedKey, rightNode);
     }
     public override int ChildIndex(TKey key) {
+      // NOTE: This is currently `o(n)`, we could make this `o(log n)` with a binary search.
       for (int i = 0; i < this.Keys.Count; i++) {
         if (this.Keys[i].CompareTo(key) > 0) return i;
       }
@@ -147,9 +150,9 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     }
   }
 
-  /// The rank of the tree (The maximum number of nodes per node)
-  private readonly int _rank; // Maximum keys per node
-  /// The root node of the tree
+  /// <summary>The rank of the tree (The maximum number of nodes per node).</summary>
+  private readonly int _rank;
+  /// <summary>The root node of the tree.</summary>
   private Node _root;
 
   /// <summary>
@@ -165,13 +168,13 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   }
 
   /// <summary>
-  /// Creates a B+ tree with the given rank and initial records
+  /// Creates a B+ tree with the given rank and initial entries
   /// Time Complexity: See bulkInsert
   /// </summary>
   /// <param name="rank">The rank of the tree (The maximum number of nodes per node)</param>
-  /// <param name="items">The initial records to insert into the tree</param>
+  /// <param name="entries">The initial entries to insert into the tree</param>
   /// <throws cref="ArgumentException">Thrown if the rank is less than 3</throws>
-  public BPlusTree(int rank, IEnumerable<Record<TKey, TValue>> items) : this(rank) => this.BulkInsert(items);
+  public BPlusTree(int rank, IEnumerable<Record<TKey, TValue>> entries) : this(rank) => this.BulkInsert(entries);
 
   // Private Helpers
   #region PrivateHelpers
@@ -212,7 +215,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     }
   }
   /// <summary>
-  /// Searches for the node containing the key
+  /// Searches for the node containing the key.
   /// Time Complexity: O(log n)
   /// </summary>
   /// <param name="key">The key to search for</param>
@@ -236,7 +239,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   }
 
   /// <summary>
-  /// Helper function for the Insert method
+  /// Helper function for the Insert method.
   /// Time Complexity: O(log n)
   /// </summary>
   /// <param name="entry">The entry to insert</param>
@@ -273,24 +276,28 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
         // Insert into the child node and return whether the insertion was successful
         return this.InsertHelp(entry, child);
       // NOTE: This is impossible to hit c#'s pattern matching just isn't very smart
-      default: throw new InvalidOperationException("Unknown node type");
+      default: throw new InvalidOperationException("Impossible, Unknown node type");
     }
   }
   /// <summary>
-  /// Builds the leaves of the tree when we are doing a bulkInsert.s
+  /// Builds the leaves of the tree when we are doing a bulkInsert.
   /// Time Complexity: O(n)
   /// </summary>
   /// <param name="list">The list of items to build the leaves from</param>
   /// <returns>A list of tuples containing the first key of the leaf and the leaf node</returns>
-  private List<(TKey? firstKey, Node node)> BuildLeaves(List<Record<TKey, TValue>> list) {
+  private List<(TKey firstKey, Node node)> BuildLeaves(List<Record<TKey, TValue>> list) {
     int chunkSize = this._rank - 1; // Max keys per leaf
-    var acc = new List<(TKey? firstKey, Node leaf)>();
+    var acc = new List<(TKey firstKey, Node leaf)>();
+    // C#'s type system is terrible at tracking null, the fact that you can pass a nullable type out of a nullable block seems like a major flaw in the design, but here we are.
+#nullable enable
     LeafNode? prev = null;
+#nullable disable
     foreach (var chunk in list.Chunk(chunkSize)) {
       // NOTE: If we didn't have to iterate through the chunk to get the keys, this function could be o(n/chunkSize) instead of o(n)
-      var curr = new LeafNode(chunk.Select(e => e.Key).ToList(), chunk.ToList(), null);
-      if (prev != null) prev.Next = curr;
+      var curr = new LeafNode(chunk.Select(e => e.Key), chunk, null);
       acc.Add((chunk[0].Key, curr));
+      // Update our chain of leaf nodes
+      if (prev != null) prev.Next = curr;
       prev = curr;
     }
     return acc;
@@ -302,8 +309,8 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// </summary>
   /// <param name="nodes">The nodes to build the tree from</param>
   /// <returns>The root of the tree</returns>
-  private Node BuildTree(List<(TKey? firstKey, Node node)> nodes) {
-    List<(TKey? firstKey, Node node)> nodeStack = nodes;
+  private Node BuildTree(List<(TKey firstKey, Node node)> nodes) {
+    List<(TKey firstKey, Node node)> nodeStack = nodes;
     while (nodeStack.Count > 1) nodeStack = this.BuildLevel(nodeStack);
     return nodeStack[0].node;
   }
@@ -313,13 +320,13 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// </summary>
   /// <param name="nodes">The nodes to build the level from</param>
   /// <returns>The nodes in the level</returns>
-  private List<(TKey? firstKey, Node node)> BuildLevel(List<(TKey? firstKey, Node node)> nodes) {
+  private List<(TKey firstKey, Node node)> BuildLevel(List<(TKey firstKey, Node node)> nodes) {
     int chunkSize = this._rank - 1;
-    var result = new List<(TKey? firstKey, Node node)>();
+    var result = new List<(TKey firstKey, Node node)>();
 
     foreach (var chunk in nodes.Chunk(chunkSize)) {
-      var key = chunk.Skip(1).Where(c => c.firstKey != null).Select(c => c.firstKey!).ToList();
-      var children = chunk.Select(c => c.node).ToList();
+      var key = chunk.Skip(1).Where(c => c.firstKey != null).Select(c => c.firstKey!);
+      var children = chunk.Select(c => c.node);
       var iNode = new InternalNode(key, children);
       result.Add((chunk[0].firstKey, iNode));
     }
@@ -328,53 +335,46 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   }
 
   /// <summary>
-  /// Helper function for the Delete method
-  /// 
+  /// Helper function for the Delete method.
+  /// Time Complexity: O(log n)
+  /// </summary>
   /// <param name="node">The node to delete from</param>
   /// <param name="key">The key to delete</param>
-  /// <param name="isRoot">True if the node is the root, false otherwise</param>
-  /// <returns>True if the key was deleted, false otherwise</returns>
-  /// 
-  /// Time Complexity: O(m log n)
-  /// </summary>
-  private bool DeleteHelp(Node node, TKey key, bool isRoot) {
-    int maxKeys = this._rank - 1;
-    // ceil((rank-1)/2) for non-root nodes
-    int minKeys = (maxKeys + 1) / 2;
-
+  /// <returns>A tuple containing `(minKey, deleted, deletedFirst)` respectively</returns>
+#nullable enable
+  private (TKey? key, bool deleted, bool deletedFirst) DeleteHelp(Node node, TKey key, bool isRoot) {
+#nullable disable
     switch (node) {
       case LeafNode leaf: {
           int index = leaf.ChildIndex(key) - 1;
-          if (index < 0 || index >= leaf.Length || leaf.Keys[index].CompareTo(key) != 0) return false;
+          if (index < 0 || index >= leaf.Length || leaf.Keys[index].CompareTo(key) != 0)
+            return (leaf.Length > 0 ? leaf.Keys[0] : default, false, false);
           leaf.Keys.RemoveAt(index);
           leaf.Values.RemoveAt(index);
-          return true;
+          return (leaf.Length > 0 ? leaf.Keys[0] : default, true, index == 0);
         }
       case InternalNode iNode: {
           int childIndex = iNode.ChildIndex(key);
           var child = iNode.Children[childIndex];
-
-          // Preemptively fix the child if it at minimum occupancy
-          // After Fix, `child` may have been replaced (merge changes the index),
-          // so we re-read it below
+          // ceil(rank/2) for non-root nodes
+          int minKeys = this._rank / 2;
+          // Preemptively fix the child if it is at the minimum occupancy. (This can merge siblings if the child is almost empty)
           if (child.Length <= minKeys && iNode.Children.Count > 1) {
             childIndex = this.FixChild(iNode, childIndex);
             child = iNode.Children[childIndex];
           }
-
           // After a possible merge, the root might now only have one child, so we need to collapse it
           if (isRoot && iNode.Keys.Count == 0 && iNode.Children.Count == 1) {
             this._root = iNode.Children[0];
+            // NOTE: This is in a tail call position meaning stack overflow isn't a worry outside of c#
             return this.DeleteHelp(this._root, key, isRoot: true);
           }
-          bool deleted = this.DeleteHelp(child, key, false);
+          var (minKey, deleted, deletedFirst) = this.DeleteHelp(child, key, isRoot: false);
           // If a child's first key changed due to deletion/rebalance, refresh the separator.
-          if (deleted && childIndex > 0 && child.Length > 0) {
-            var curr = child;
-            while (curr is InternalNode internalNode) curr = internalNode.Children[0];
-            iNode.Keys[childIndex - 1] = ((LeafNode)curr).Keys[0]; // the first key of the leftmost leaf
+          if (deletedFirst && childIndex > 0 && child.Length > 0 && minKey != null) {
+            iNode.Keys[childIndex - 1] = minKey; // the first key of the leftmost leaf
           }
-          return deleted;
+          return (minKey, deleted, childIndex == 0 && deletedFirst);
         }
       default: throw new InvalidOperationException("Unknown node type");
     }
@@ -392,15 +392,12 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// <param name="childIndex">The index of the child to fix</param>
   /// <returns>The index in parent.Children that the caller should descent into</returns>
   private int FixChild(InternalNode parent, int childIndex) {
-    int maxKeys = this._rank - 1;
-    int minKeys = (maxKeys + 1) / 2;
-
+    int minKeys = this._rank / 2;
     var child = parent.Children[childIndex];
-
-    // Try to borrow from the left sibling
+    // Try to borrow from the left sibling if it exists
     if (childIndex > 0) {
       var leftSibling = parent.Children[childIndex - 1];
-
+      // Ensure that the right sibling has enough keys to donate before we try to borrow from it
       if (leftSibling.Length > minKeys) {
         // Rotate: left sibling donates its rightmost entry through the parent
         if (leftSibling is LeafNode leftLeaf && child is LeafNode childLeaf) {
@@ -427,11 +424,10 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
         return childIndex; // child index is unchanged
       }
     }
-
-    // Try to borrow from the right sibling
+    // Try to borrow from the right sibling if it exists
     if (childIndex < parent.Children.Count - 1) {
       var rightSibling = parent.Children[childIndex + 1];
-
+      // Ensure that the right sibling has enough keys to donate before we try to borrow from it
       if (rightSibling.Length > minKeys) {
         if (rightSibling is LeafNode rightLeaf && child is LeafNode childLeaf) {
           childLeaf.Keys.Add(rightLeaf.Keys[0]);
@@ -449,7 +445,6 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
         return childIndex; // child index is unchanged
       }
     }
-
     // Merge: no sibling has enough keys
     // Prefer merging with the left sibling so the target child ends up in the left
     // node and `childIndex` decreases by one.
@@ -491,7 +486,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   #endregion
 
   /// <summary>
-  /// Checks if the tree is empty
+  /// Checks if the tree is empty.
   /// Time Complexity: O(1)
   /// </summary>
   public bool IsEmpty => this._root switch {
@@ -508,7 +503,9 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// <param name="outValue">The reference to be set to the value if the key is found.</param>
   /// 
   /// <returns>`true` if the key was found, `false` otherwise. The value is returned via the `outValue` parameter.</returns>
+#nullable enable
   public bool Search(TKey key, ref Record<TKey, TValue>? outValue) {
+#nullable disable
     // Find the leaf node that should contain the value for the key
     LeafNode leaf = BPlusTree<TKey, TValue>.SearchHelp(key, this._root);
     // Search for the key in the leaf node
@@ -558,7 +555,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     // Insert the key-value pair into the appropriate leaf
     if (!this.InsertHelp(entry, this._root)) {
       // If we couldn't perform the insertion it means the key was already in the tree.
-      throw new DuplicateKeyException();
+      throw new DuplicateKeyException(entry.Key.ToString() ?? "unknown");
     }
   }
   /// <summary>
@@ -569,7 +566,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// <param name="entries">The entries to insert</param>
   /// <exception cref="InvalidOperationException">Thrown if the tree is not empty</exception>
   public void BulkInsert(IEnumerable<Record<TKey, TValue>> entries) {
-    if (entries.Count() <= 0) return;
+    if (!entries.Any()) return;
     if (!this.IsEmpty) throw new InvalidOperationException("BulkInsert requires an empty tree");
     var list = entries.ToList();
     // Time Complexity: O(n log n)
@@ -579,7 +576,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       // Because the list is sorted, if there are duplicate keys they will be adjacent to each other, so we just check if there are any adjacent entries with the same key and throw an exception if so.
       if (list[i - 1].Key.CompareTo(list[i].Key) == 0) {
         // We found a duplicate key throw an exception
-        throw new DuplicateKeyException();
+        throw new DuplicateKeyException(list[i].Key.ToString() ?? "unknown");
       }
     }
     // Build leaf level
@@ -591,14 +588,15 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// Time Complexity: O(log n)
   /// </summary>
   /// <param name="key">The key to delete</param>
-  /// <returns>True if the key was deleted, false otherwise</returns>
+  /// <returns>`true` if the key was deleted, `false` otherwise</returns>
   public bool Delete(TKey key) {
     // A root that is an internal node with a single child can be collapsed.
     // We do this eagerly so we always have room to merge children during descent.
     if (this._root is InternalNode rootInternal && rootInternal.Children.Count == 1) {
       this._root = rootInternal.Children[0];
     }
-    return this.DeleteHelp(this._root, key, isRoot: true);
+    var (_, deleted, _) = this.DeleteHelp(this._root, key, isRoot: true);
+    return deleted;
   }
   /// <summary>
   /// Merges two trees into a new tree
@@ -627,6 +625,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   public BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> other) => Merge(this, other);
 }
 
+// NOTE: We expose a program so we can build a binary
 internal static class Program {
   private static void Main() {
   }
