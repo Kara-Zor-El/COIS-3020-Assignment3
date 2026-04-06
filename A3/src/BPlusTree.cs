@@ -6,14 +6,34 @@ namespace BPlusTree;
 
 #nullable enable
 
-// TODO: Document this
+/// <summary>
+/// Exception thrown when a duplicate key is inserted into the tree
+/// </summary>
 public class DuplicateKeyException : Exception {
-  // TODO: Document this
+  /// <summary>
+  /// Creates a new DuplicateKeyException
+  /// </summary>
   public DuplicateKeyException() : base("Duplicate key inserted into B+ tree") { }
 }
 
-// TODO: Document this
+/// <summary>
+/// A B+tree data structure.
+///
+/// A B+tree is a variant of a B-tree in which each node contains only keys,
+/// and to which an additional level of indirection is added to allow for efficient range queries.
+/// In a B+tree, all values are stored in the leaf nodes, and the internal nodes only store keys
+/// to guide the search process.
+///
+/// <see href="https://en.wikipedia.org/wiki/B%2B_tree">B+ tree</see>
+/// </summary>
+/// <typeparam name="TKey">The type of the keys in the tree</typeparam>
+/// <typeparam name="TValue">The type of the values in the tree</typeparam>
 public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
+  // NOTE: For all assignments done for 3020, we started by writing the code in Grain
+  // and then ported our implementation to C#.
+  // Below is a much more elegant understanding of what the tree structure should look like.
+  // Which is more intuitive than abstract classes.
+  // See full implementation here: https://github.com/spotandjake/grain-dsa
   // enum rec Node<kType, rType> {
   //     Internal {
   //     keys: Box<List<kType>>,
@@ -25,9 +45,16 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   //     next: Box<Option<Node<kType, rType>>>,
   //   },
   // }
-  // TODO: Document this
+
+  /// <summary>
+  /// Within a B+ tree, all nodes will be either a leaf node or an internal node.
+  /// This abstract class is used to represent both types of nodes.
+  /// </summary>
   private abstract class Node {
-    // TODO: Document
+    /// <summary>
+    /// The number of keys in the node.
+    /// Time Complexity: O(1)
+    /// </summary>
     public abstract int Length { get; }
     /// <summary>
     /// Checks if a node is full.
@@ -43,21 +70,17 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     public abstract (TKey promotedKey, Node rightNode) Split();
     /// <summary>
     /// Finds the index of the key in the list of keys
-    /// 
-    /// <param name="keys">The list of keys</param>
-    /// <param name="key">The key to find</param>
-    /// 
-    /// Time Complexity: O(m)
     /// </summary>
-      // TODO: Make this abstract and implement it on each node type
-    public static int ChildIndex(List<TKey> keys, TKey key) {
-      for (int i = 0; i < keys.Count; i++) {
-        if (keys[i].CompareTo(key) > 0) return i;
-      }
-      return keys.Count;
-    }
+    /// <param name="key">The key to find</param>
+    /// <returns>The index of the key in the list of keys</returns>
+    public abstract int ChildIndex(TKey key);
   }
-  // TODO: Document this (Consider making them children Node)
+  /// <summary>
+  /// A leaf node in the B+ tree.
+  /// </summary>
+  /// <param name="Keys">The keys in the leaf node</param>
+  /// <param name="Values">The values in the leaf node</param>
+  /// <param name="Next">The next leaf node in the linked list of leaves</param>
   private class LeafNode(List<TKey> Keys, List<Record<TKey, TValue>> Values, LeafNode? Next) : Node {
     public List<TKey> Keys = Keys;
     public List<Record<TKey, TValue>> Values = Values;
@@ -81,8 +104,18 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       // Return the promoted key and the new right node
       return (rightLeaf.Keys[0], rightLeaf);
     }
+    public override int ChildIndex(TKey key) {
+      for (int i = 0; i < this.Keys.Count; i++) {
+        if (this.Keys[i].CompareTo(key) > 0) return i;
+      }
+      return this.Keys.Count;
+    }
   }
-  // TODO: Document this
+  /// <summary>
+  /// An internal node in the B+ tree.
+  /// </summary>
+  /// <param name="Keys">The keys in the internal node</param>
+  /// <param name="Children">The children of the internal node</param>
   private class InternalNode(List<TKey> Keys, List<Node> Children) : Node {
     public List<TKey> Keys = Keys;
     public List<Node> Children = Children;
@@ -106,10 +139,17 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       // Return the promoted key and the new right node
       return (promotedKey, rightNode);
     }
+    public override int ChildIndex(TKey key) {
+      for (int i = 0; i < this.Keys.Count; i++) {
+        if (this.Keys[i].CompareTo(key) > 0) return i;
+      }
+      return this.Keys.Count;
+    }
   }
-  // TODO: Document this
+
+  /// The rank of the tree (The maximum number of nodes per node)
   private readonly int _rank; // Maximum keys per node
-                              // TODO: Document this
+  /// The root node of the tree
   private Node _root;
 
   /// <summary>
@@ -186,7 +226,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
         // NOTE: If there was ever a cycle in the tree this would loop infinitely, 
         //       but that should never happen with a correctly implemented B+ tree
         case InternalNode iNode:
-          int index = Node.ChildIndex(iNode.Keys, key);
+          int index = iNode.ChildIndex(key);
           curr = iNode.Children[index];
           break;
         case LeafNode leaf: return leaf;
@@ -206,12 +246,10 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       // We found the leaf and now must insert into the leaf
       case LeafNode leaf:
         // Look up the childIndex to insert the key-value pair at
-        int index = Node.ChildIndex(leaf.Keys, entry.Key);
+        int index = leaf.ChildIndex(entry.Key);
         // Check if the key is already in the tree.
         // NOTE: It would be at `index - 1` because childIndex gives us the current insertion position
         if (index > 0 && leaf.Keys[index - 1].CompareTo(entry.Key) == 0) return false;
-        // TODO: I don't think we can ever hit this case because of the above note
-        if (index < leaf.Length && leaf.Keys[index].CompareTo(entry.Key) == 0) return false;
         // Insert the key-value pair into the leaf node at the appropriate index
         leaf.Keys.Insert(index, entry.Key);
         leaf.Values.Insert(index, entry);
@@ -219,7 +257,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
       // We are looking for the leaf node to insert into, but currently are on an internal node
       case InternalNode iNode:
         // Look up the childIndex to insert the key-value pair at
-        int childIndex = Node.ChildIndex(iNode.Keys, entry.Key);
+        int childIndex = iNode.ChildIndex(entry.Key);
         var child = iNode.Children[childIndex];
         // Pre-emptively split the child if it is full to guarantee we never have to split on the way back up
         if (child.IsNodeFull(this._rank)) {
@@ -274,18 +312,197 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   /// <param name="nodes">The nodes to build the level from</param>
   /// <returns>The nodes in the level</returns>
   private List<(TKey? firstKey, Node node)> BuildLevel(List<(TKey? firstKey, Node node)> nodes) {
-    // TODO: I think we can clean this up quite a bit using List.chunk
     int chunkSize = this._rank - 1;
     var result = new List<(TKey? firstKey, Node node)>();
-    for (int i = 0; i < nodes.Count; i += chunkSize) {
-      int endIndex = Math.Min(i + chunkSize, nodes.Count);
-      var chunk = nodes.GetRange(i, endIndex - i);
+
+    foreach (var chunk in nodes.Chunk(chunkSize)) {
       var key = chunk.Skip(1).Where(c => c.firstKey != null).Select(c => c.firstKey!).ToList();
       var children = chunk.Select(c => c.node).ToList();
       var iNode = new InternalNode(key, children);
       result.Add((chunk[0].firstKey, iNode));
     }
+
     return result;
+  }
+
+  /// <summary>
+  /// Merges two trees into a new tree
+  /// Time Complexity: O(n + m) where n and m are the number of entries in the two trees
+  /// </summary>
+  /// <param name="tree1">The first tree to merge</param>
+  /// <param name="tree2">The second tree to merge</param>
+  /// <returns>A new tree containing all the entries from both trees</returns>
+  public static BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> tree1, BPlusTree<TKey, TValue> tree2) {
+    var newTree = new BPlusTree<TKey, TValue>(tree1._rank);
+    // Collect our entries
+    var tree1LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree1._root); // Get the left most leaf
+    var tree1Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree1LeftMostLeaf).SelectMany(l => l.Values);
+    var tree2LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree2._root); // Get the left most leaf
+    var tree2Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree2LeftMostLeaf).SelectMany(l => l.Values);
+    // NOTE: A slightly more efficient way of doing the concat that would also handle the sort is go 
+    //       through both enumerable at the same time taking the smaller entry each time into the 
+    //       accumulator list. This is O(n + m) and negates the need to sort.
+    var entries = tree1Entries.Concat(tree2Entries).ToList();
+    // NOTE: This sort is technically o(n log n) but because the trees are already sorted on their own it will require a lot less sorting and will be closer to O(n + M)
+    entries.Sort((a, b) => a.Key.CompareTo(b.Key));
+    // We can now just insert our entries into the new tree using bulk insert.
+    newTree.BulkInsert(entries); // o(log n) as the list is sorted
+    return newTree;
+  }
+  public BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> other) => Merge(this, other);
+  /// <summary>
+  /// Helper function for the Delete method
+  /// 
+  /// <param name="node">The node to delete from</param>
+  /// <param name="key">The key to delete</param>
+  /// <param name="isRoot">True if the node is the root, false otherwise</param>
+  /// <returns>True if the key was deleted, false otherwise</returns>
+  /// 
+  /// Time Complexity: O(m log n)
+  /// </summary>
+  private bool DeleteHelp(Node node, TKey key, bool isRoot) {
+    int maxKeys = this._rank - 1;
+    // ceil((rank-1)/2) for non root nodes
+    int minKeys = isRoot ? 1 : (maxKeys + 1) / 2;
+
+    switch (node) {
+      case LeafNode leaf: {
+          int index = leaf.ChildIndex(key);
+          if (leaf.Keys[index].CompareTo(key) != 0) return false;
+          leaf.Keys.RemoveAt(index);
+          leaf.Values.RemoveAt(index);
+          return true;
+        }
+      case InternalNode iNode: {
+          int childIndex = iNode.ChildIndex(key) - 1;
+          var child = iNode.Children[childIndex];
+
+          // Preemptively fix the child if it at minimum occupancy
+          // After Fix, `child` may have been replaced (merge changes the index),
+          // so we re-read it below
+          if (child.Length < minKeys && !isRoot) {
+            childIndex = this.FixChild(iNode, childIndex);
+            child = iNode.Children[childIndex];
+          }
+
+          // After a possible merge, the root might now only have one child, so we need to collapse it
+          if (iNode.Keys.Count == 0 && iNode.Children.Count == 1) {
+            this._root = iNode.Children[0];
+            return this.DeleteHelp(this._root, key, isRoot: true);
+          }
+          return this.DeleteHelp(child, key, false);
+        }
+      default: throw new InvalidOperationException("Unknown node type");
+    }
+  }
+
+  /// <summary>
+  /// Fixes a child node of an internal node to have more than the minimum number of keys
+  /// by either:
+  /// - rotating a key from a sibling through the parent separator,
+  /// - merging the child with a sibling and pulling the separator down
+  /// 
+  /// <remarks>It may shift left by one after a left-merge</remarks>
+  /// </summary>
+  /// <param name="parent">The parent node</param>
+  /// <param name="childIndex">The index of the child to fix</param>
+  /// <returns>The index in parent.Children that the caller should descent into</returns>
+  private int FixChild(InternalNode parent, int childIndex) {
+    int maxKeys = this._rank - 1;
+    int minKeys = (maxKeys + 1) / 2;
+
+    var child = parent.Children[childIndex];
+
+    // Try to borrow from the left sibling
+    if (childIndex > 0) {
+      var leftSibling = parent.Children[childIndex - 1];
+
+      if (leftSibling.Length > minKeys) {
+        // Rotate: left sibling donates its rightmost entry through the parent
+        if (leftSibling is LeafNode leftLeaf && child is LeafNode childLeaf) {
+          // For leaves: copy the separator down into the child, pushing the
+          // siblings last key up to the parent separator slot
+          int last = leftLeaf.Length - 1;
+          childLeaf.Keys.Insert(0, leftLeaf.Keys[last]);
+          childLeaf.Values.Insert(0, leftLeaf.Values[last]);
+          leftLeaf.Keys.RemoveAt(last);
+          leftLeaf.Values.RemoveAt(last);
+          // The parent separator between left-sibling and child becomes the new first
+          // key of child (already inserted above)
+          // and update the separator.
+          parent.Keys[childIndex - 1] = childLeaf.Keys[0];
+        } else if (leftSibling is InternalNode leftInternal && child is InternalNode childInternal) {
+          // For internal nodes: copy the separator down into the child, pushing the
+          // siblings last key up to be the new separator
+          childInternal.Keys.Insert(0, parent.Keys[childIndex - 1]);
+          childInternal.Children.Insert(0, leftInternal.Children[-1]);
+          parent.Keys[childIndex - 1] = leftInternal.Keys[-1];
+          leftInternal.Keys.RemoveAt(leftInternal.Length - 1);
+          leftInternal.Children.RemoveAt(leftInternal.Children.Count - 1);
+        }
+        return childIndex; // child index is unchanged
+      }
+    }
+
+    // Try to borrow from the right sibling
+    if (childIndex < parent.Children.Count - 1) {
+      var rightSibling = parent.Children[childIndex + 1];
+
+      if (rightSibling.Length > minKeys) {
+        if (rightSibling is LeafNode rightLeaf && child is LeafNode childLeaf) {
+          childLeaf.Keys.Add(rightLeaf.Keys[0]);
+          childLeaf.Values.Add(rightLeaf.Values[0]);
+          rightLeaf.Keys.RemoveAt(0);
+          rightLeaf.Values.RemoveAt(0);
+          parent.Keys[childIndex] = childLeaf.Keys[0];
+        } else if (rightSibling is InternalNode rightInternal && child is InternalNode childInternal) {
+          childInternal.Keys.Add(parent.Keys[childIndex]);
+          childInternal.Children.Add(rightInternal.Children[0]);
+          parent.Keys[childIndex] = rightInternal.Keys[0];
+          rightInternal.Keys.RemoveAt(0);
+          rightInternal.Children.RemoveAt(0);
+        }
+        return childIndex; // child index is unchanged
+      }
+    }
+
+    // Merge: no sibling has enough keys
+    // Prefer merging with the left sibling so the target child ends up in the left
+    // node and `childIndex` decreases by one.
+    // caller must use the returned index
+    if (childIndex > 0) {
+      // Merge child into left sibling
+      var leftSibling = parent.Children[childIndex - 1];
+      if (leftSibling is LeafNode leftLeaf && child is LeafNode childLeaf) {
+        leftLeaf.Keys.AddRange(childLeaf.Keys);
+        leftLeaf.Values.AddRange(childLeaf.Values);
+        leftLeaf.Next = childLeaf.Next;
+      } else if (leftSibling is InternalNode leftInternal && child is InternalNode childInternal) {
+        // Pull the parent separator down into the merged internal node
+        leftInternal.Keys.Add(parent.Keys[childIndex - 1]);
+        leftInternal.Keys.AddRange(childInternal.Keys);
+        leftInternal.Children.AddRange(childInternal.Children);
+      }
+      parent.Keys.RemoveAt(childIndex - 1);
+      parent.Children.RemoveAt(childIndex);
+      return childIndex - 1;
+    } else {
+      // Merge right sibling into child
+      var rightSibling = parent.Children[childIndex + 1];
+      if (rightSibling is LeafNode rightLeaf && child is LeafNode childLeaf) {
+        childLeaf.Keys.AddRange(rightLeaf.Keys);
+        childLeaf.Values.AddRange(rightLeaf.Values);
+        childLeaf.Next = rightLeaf.Next;
+      } else if (rightSibling is InternalNode rightInternal && child is InternalNode childInternal) {
+        childInternal.Keys.Add(parent.Keys[childIndex]);
+        childInternal.Keys.AddRange(rightInternal.Keys);
+        childInternal.Children.AddRange(rightInternal.Children);
+      }
+      parent.Keys.RemoveAt(childIndex);
+      parent.Children.RemoveAt(childIndex + 1);
+      return childIndex; // child index is unchanged
+    }
+    throw new InvalidOperationException("Impossible: Somehow an abstract Node was instantiated");
   }
   #endregion
 
@@ -311,7 +528,7 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     // Find the leaf node that should contain the value for the key
     LeafNode leaf = BPlusTree<TKey, TValue>.SearchHelp(key, this._root);
     // Search for the key in the leaf node
-    int index = Node.ChildIndex(leaf.Keys, key) - 1;
+    int index = leaf.ChildIndex(key) - 1;
     if (index >= 0 && index < leaf.Length && leaf.Keys[index].CompareTo(key) == 0) {
       outValue = leaf.Values[index];
       return true;
@@ -387,194 +604,18 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   }
   /// <summary>
   /// Deletes a key from the tree.
-  /// Time Complexity: O(n)
+  /// Time Complexity: O(log n)
   /// </summary>
   /// <param name="key">The key to delete</param>
   /// <returns>True if the key was deleted, false otherwise</returns>
   public bool Delete(TKey key) {
-    // TODO: Replace this impl
-    // NOTE: While this could be a lot more efficient it surprisingly doesn't scale that much worse todo the super naive,
-    //      implementation of just removing it from the list of entires and rebuilding the tree. If we were to implement the more
-    //      efficient deletion algorithm that involves complex rebalancing we could get to O(log n) time complexity, but the constant
-    //      factor would be far worse and it would be a lot more code, so we opted for the simpler implementation.
-    var firstLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(this._root);
-    var entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(firstLeaf).SelectMany(l => l.Values).ToList();
-    // TODO: Lets clean this up????
-    int index = Node.ChildIndex(entries.Select(e => e.Key).ToList(), key) - 1;
-    if (index >= entries.Count || entries[index].Key.CompareTo(key) != 0) {
-      return false;
+    // A root that is an internal node with a single child can be collapsed.
+    // We do this eagerly so we always have room to merge children during descent.
+    if (this._root is InternalNode rootInternal && rootInternal.Children.Count == 1) {
+      this._root = rootInternal.Children[0];
     }
-    entries.RemoveAt(index);
-    this._root = new LeafNode([], [], null);
-    this.BulkInsert(entries);
-    return true;
+    return this.DeleteHelp(this._root, key, isRoot: true);
   }
-  /// <summary>
-  /// Merges two trees into a new tree
-  /// Time Complexity: O(n + m) where n and m are the number of entries in the two trees
-  /// </summary>
-  /// <param name="tree1">The first tree to merge</param>
-  /// <param name="tree2">The second tree to merge</param>
-  /// <returns>A new tree containing all the entries from both trees</returns>
-  public static BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> tree1, BPlusTree<TKey, TValue> tree2) {
-    var newTree = new BPlusTree<TKey, TValue>(tree1._rank);
-    // Collect our entries
-    var tree1LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree1._root); // Get the left most leaf
-    var tree1Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree1LeftMostLeaf).SelectMany(l => l.Values);
-    var tree2LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree2._root); // Get the left most leaf
-    var tree2Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree2LeftMostLeaf).SelectMany(l => l.Values);
-    // NOTE: A slightly more efficent way of doing the concat that would also handle the sort is go 
-    //       through both enumerable at the same time taking the smaller entry each time into the 
-    //       accumulator list. This is O(n + m) and negates the need to sort.
-    var entries = tree1Entries.Concat(tree2Entries).ToList();
-    // NOTE: This sort is technically o(n log n) but because the trees are already sorted on their own it will require a lot less sorting and will be closer to O(n + M)
-    entries.Sort((a, b) => a.Key.CompareTo(b.Key));
-    // We can now just insert our entires into the new tree using bulk insert.
-    newTree.BulkInsert(entries); // o(log n) as the list is sorted
-    return newTree;
-  }
-  public BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> other) => Merge(this, other);
-  // /// <summary>
-  // /// Helper function for the Delete method
-  // /// 
-  // /// <param name="node">The node to delete from</param>
-  // /// <param name="key">The key to delete</param>
-  // /// <param name="isRoot">True if the node is the root, false otherwise</param>
-  // /// <returns>A tuple containing whether the key was deleted and whether the node underflows</returns>
-  // /// 
-  // /// Time Complexity: O(m log n)
-  // /// </summary>
-  // private (bool deleted, bool underflow) DeleteHelp(Node node, TKey key, bool isRoot) {
-  //   int maxKeys = this._rank - 1;
-  //   int minKeys = isRoot ? 0 : maxKeys / 2;
-
-  //   if (node is LeafNode leaf) {
-  //     int index = this.LowerBound(leaf.Keys, key);
-  //     if (index >= leaf.Length || leaf.Keys[index].CompareTo(key) != 0) return (false, false);
-
-  //     leaf.Keys.RemoveAt(index);
-  //     leaf.Values.RemoveAt(index);
-  //     return (true, leaf.Length < minKeys);
-  //   } else if (node is InternalNode iNode) {
-  //     int index = this.ChildIndex(iNode.Keys, key);
-  //     var child = iNode.Children[index];
-  //     var (deleted, childUnderflow) = this.DeleteHelp(child, key, isRoot: false);
-  //     if (!deleted) return (false, false);
-
-  //     if (childUnderflow) {
-  //       this.RebalanceChildAt(iNode, index);
-  //     } else {
-  //       this.SyncInternalKeys(iNode);
-  //     }
-
-  //     return (true, iNode.Length < minKeys);
-  //   }
-  //   throw new InvalidOperationException("Unknown node type");
-  // }
-
-  // /// <summary>
-  // /// Rebalances a child at a given index
-  // /// 
-  // /// <param name="parent">The parent node</param>
-  // /// <param name="index">The index of the child to rebalance</param>
-  // /// 
-  // /// Time Complexity: O(m log n)
-  // /// </summary>
-  // private void RebalanceChildAt(InternalNode parent, int index) {
-  //   int maxKeys = this._rank - 1;
-  //   int half = maxKeys / 2;
-  //   var child = parent.Children[index];
-
-  //   // Try borrowing from the left sibling
-  //   if (index > 0) {
-  //     var left = parent.Children[index - 1];
-  //     if (left is LeafNode leftLeaf && child is LeafNode childLeaf && leftLeaf.Length > half) {
-  //       int last = leftLeaf.Length - 1;
-  //       childLeaf.Keys.Insert(0, leftLeaf.Keys[last]);
-  //       childLeaf.Values.Insert(0, leftLeaf.Values[last]);
-  //       leftLeaf.Keys.RemoveAt(last);
-  //       leftLeaf.Values.RemoveAt(last);
-
-  //       this.SyncInternalKeys(parent);
-  //       return;
-  //     }
-  //     if (left is InternalNode leftInternal && child is InternalNode childInternal && leftInternal.Length > half) {
-  //       int last = leftInternal.Children.Count - 1;
-  //       childInternal.Children.Insert(0, leftInternal.Children[last]);
-  //       leftInternal.Children.RemoveAt(last);
-  //       this.SyncInternalKeys(leftInternal);
-  //       this.SyncInternalKeys(childInternal);
-  //       this.SyncInternalKeys(parent);
-  //       return;
-  //     }
-  //   }
-
-  //   // Try borrowing from the right sibling
-  //   if (index + 1 < parent.Children.Count) {
-  //     var right = parent.Children[index + 1];
-  //     if (right is LeafNode rightLeaf && child is LeafNode childLeaf && rightLeaf.Length > half) {
-  //       int first = 0;
-  //       childLeaf.Keys.Add(rightLeaf.Keys[first]);
-  //       childLeaf.Values.Add(rightLeaf.Values[first]);
-  //       rightLeaf.Keys.RemoveAt(first);
-  //       rightLeaf.Values.RemoveAt(first);
-  //       this.SyncInternalKeys(parent);
-  //       return;
-  //     }
-  //     if (right is InternalNode rightInternal && child is InternalNode childInternal && rightInternal.Length > half) {
-  //       int first = 0;
-  //       childInternal.Children.Add(rightInternal.Children[first]);
-  //       rightInternal.Children.RemoveAt(first);
-  //       this.SyncInternalKeys(rightInternal);
-  //       this.SyncInternalKeys(childInternal);
-  //       this.SyncInternalKeys(parent);
-  //       return;
-  //     }
-  //   }
-
-  //   // merging
-  //   if (index > 0) {
-  //     // merge child into left sibling
-  //     var left = parent.Children[index - 1];
-  //     if (left is LeafNode leftLeaf && child is LeafNode childLeaf) {
-  //       leftLeaf.Keys.AddRange(childLeaf.Keys);
-  //       leftLeaf.Values.AddRange(childLeaf.Values);
-  //       leftLeaf.Next = childLeaf.Next;
-  //     } else if (left is InternalNode leftInternal && child is InternalNode childInternal) {
-  //       leftInternal.Children.AddRange(childInternal.Children);
-  //       this.SyncInternalKeys(leftInternal);
-  //     }
-  //     parent.Children.RemoveAt(index);
-  //   } else if (index + 1 < parent.Children.Count) {
-  //     // merge right sibling into child
-  //     var right = parent.Children[index + 1];
-  //     if (right is LeafNode rightLeaf && child is LeafNode childLeaf) {
-  //       childLeaf.Keys.AddRange(rightLeaf.Keys);
-  //       childLeaf.Values.AddRange(rightLeaf.Values);
-  //       childLeaf.Next = rightLeaf.Next;
-  //     } else if (right is InternalNode rightInternal && child is InternalNode childInternal) {
-  //       childInternal.Children.AddRange(rightInternal.Children);
-  //       this.SyncInternalKeys(childInternal);
-  //     }
-  //     parent.Children.RemoveAt(index + 1);
-  //   }
-  //   this.SyncInternalKeys(parent);
-  // }
-
-  // /// <summary>
-  // /// Syncs the keys of an internal node
-  // /// 
-  // /// <param name="node">The node to sync</param>
-  // /// 
-  // /// Time Complexity: O(m * height) where h is the subtree height
-  // /// </summary>
-  // private void SyncInternalKeys(InternalNode node) {
-  //   node.Keys.Clear();
-  //   for (int i = 1; i < node.Children.Count; i++) {
-  //     var key = this.LeftmostLeafKey(node.Children[i]);
-  //     if (key != null) node.Keys.Add(key);
-  //   }
-  // }
 }
 
 internal static class Program {
