@@ -4,30 +4,49 @@ Authors:
 * 🦊 Jake Follest (0797420)
 * Kara Wilson (0800561)
 
-# BPlusTree
+## Working with the project
+
+### Building and running the tests
+To build the project and run the tests you can use the following commands in the terminal:
+```shell
+task
+```
+
+#### Build
+In order to build the project you can run `task build` this will compile all of the source files. If you do not have `task` installed you can run `dotnet build A3 --configuration Release` and `dotnet build A3Tests --configuration Release` to build both the main project and the test project.
+
+#### Test
+In order to run the tests you can run `task test` this will build the project and then run all of our unit tests against the implementation. If you do not have `task` installed you can run `dotnet test A3Tests --logger "console;verbosity=detailed" -- {{.CLI_ARGS}}` to run the tests after building the project.
+
+#### Format
+In order to format the code you can run `task format` this will run `dotnet format` on both the main project and the test project to format all of the code according to the .editorconfig file. If you do not have `task` installed you can run `dotnet format A3` and `dotnet format A3Tests`.
+
+### Dependencies
+This project has no external dependencies for the implementation beyond `MSUnit` which is purely used for testing and is only a development dependency, that comes pre-installed with the .NET SDK so there is no need to install it separately. As for system dependencies we use the following tooling:
+* `dotnet` (Required) - As we use c# dotnet is required to build and work with the project
+* `task` (Optional, but recommended for ease of use) - [Taskfile](https://taskfile.dev/) is used in order to make development simpler and to provide a consistent interface.
+* `nix` (Optional) - Nix is used to manage our development environment and ensure everyone is working with the same versions to see the tooling we use check `flake.nix` for the up to date list. It isn't needed and a user can just install the tools defined there to run the project.
 
 
 ## Implementation
 
-### Make
-
-This function is extremely simple, it just creates a brand new B+tree, with the root node being an empty leaf node.
+Below is a basic overview of our implementation.
 
 ### Search
 
-In order to implement search we must think in two parts, the first part is finding the leaf that contains the given node this is done by calling the helper function `searchHelp` with `root` and the process is defined below, and the second part is searching through the leaf node to find the value corresponding to the given key.
+In order to implement search on the B+Tree we use our `searchHelp` helper function all this does is take the root of the tree and start searching on it this lets us think at the node level instead of the parent level. When searching there are two different things we do depending on if we are looking at a leaf or internal node.
 
-#### SearchHelp
-When we are looking for a key through the tree we have two cases, if the current node we are looking at is a leaf the key must be in this leaf. If the node we are looking at is an internal node we need to determine which bucket to traverse to next. The way we find the bucket is by iterating through the keys in the internal node until we find a key that is greater than the key we are looking for, when we hit this case we know that the key must be in the bucket prior to the key that is greater than it. If we reach the end of the keys without finding a key greater than the key we are looking for then we know that the key must be in the last bucket, or is not in the tree.
+#### Internal Nodes
+When we are looking at an internal node we need to determine which child bucket to traverse into, this is done by using `childIndex` which iterates through the keys of the internal node and finds the first key that is greater than the key we are looking for, when we find this key we know that the key we are looking for must be in the bucket prior to this key. We can then call `searchHelp` on the child node in this bucket to continue our search down the tree.
 
-#### Searching the leaf
-We can actually use the exact same process as described in `searchHelp` directly on the leaf itself to find the value in the leaf, iterate through the leaf until we find the case of `k == key` 
+#### Leaf Nodes
+Leaf nodes are actually pretty similar we can use the same process as we do for internal nodes to find the key in the leaf node, we iterate through the keys in the leaf node until we find a key that is greater than the key we are looking for, when we find this key we know that the key we are looking for must be in the bucket prior to this key, if we reach the end of the keys without finding a key greater than the key we are looking for then we know that the key must be in the last bucket, or is not in the tree. Once we find the bucket that the key should be in we double check that they key in this bucket is actually the key we are looking for if it is we return the value if it isn't then we know that the key is not in the tree and we can return null.
 
 ### Range
 
-When we are searching for a range of keys we can use the same process as search to find the leaf that contains the first key. From there we can iterate through the linked list of leaf nodes adding anything where the key is grater than k1 and less than k2 to the result list until we reach a key that is greater than k2, at which point we can stop iterating through the leaf nodes and return the result list.
+When we are performing a range operation its really rather simple we start by calling our `searchHelp` function to find the leaf node, that contains the first key. We then call our `GetLeavesFromStart` helper which returns all the leaf nodes starting from the leaf node we give it to the end of the tree following the next property of a leaf node. While iterating through the leaves we iterate through the values if the key is greater than the start key we add it to an accumulator list, if the key is greater than the end key we can stop iterating and return the accumulator.
 
-If we were using vectors over linked lists inside the leaf nodes we could optimize this a little instead of iterating through every key in the leaf nodes we could check the final key in the leaf node to see if it is less than k2, to determine if we need to iterate or are on the last leaf, this saves quite a bit of time but it doesn't make sense on a linked list where you need to traverse the entire list to get the tail.
+There is a small optimzation we could do here that we don't which is to check the last key and first key of the leaf node to determine if all the values in the leaf are within the range in this case we could just add all of the values in the leaf node. This would save us the iteration and if implemented well by the runtime could turn an `o(n)` operation into an `o(1)` operation. This would hurt performance in the case where we have a lot of small ranges or ranges inside of a leaf but it would help performance in the case where we have a lot of large ranges or ranges that span multiple leaf nodes. We opted not to implement this optimization as it would cloud the implementation and make it less explicit for performance we don't need for our use cases.
 
 ### Insert
 
@@ -47,10 +66,10 @@ TODO:
 
 ### Merge
 
-Merge itself is very simple as it re-uses `bulkInsert` we essentially just take all of the key value pairs from both trees, we do this by calling a helper function `getMinLeaf` which traverses down the left most path of the tree to find the minimum leaf we then follow the `next` collecting all the key values pairs until we reach the end of the linked list of leaf nodes. Once we have all of the key value pairs from both trees we can just merge the two lists together and call `bulkInsert` on the merged list to create a new tree with all of the key value pairs from both trees.
+Merge itself is very simple there are a few ways to implement merge all with different tradeoffs after considering a few different approaches we decided to implement a rather simple one. We navigate to the left most leaf of both trees and collect all of the key value pairs from both trees into a single list. (You can think of this as if we call `concat(range(start, end, tree1), range(start,end, tree2)))` conceptually). Once we have a list of all keys from the nodes we use `bulkInsert` to create a new tree with the same rank as tree1. This approach is pretty efficient and depending on the sorting algorithm used by the stdlib can be done in `o(n + m)` time where `n` and `m` are the number of key value pairs in tree1 and tree2 respectively. This is actually rather optimal when you consider that we have to look at every key to ensure they are ordered anyways.
 
-### FromList
+Merge could be implemented more similar to bulkInsert but working on the nodes instead of building them from scratch this would be more efficient and if both trees had the same rank could let us merge in `o(log n)` time but this would be a much more complex implementation and has issues when the trees have different ranks.
 
-Implementing fromList is pretty simple as it's just a matter of bulk inserting all of the key value pairs from the list into an empty tree of the desired rank, this means that the implementation of fromList is just a call to bulkInsert with the list and a new empty tree.
+As a note in our implementation we use c# standard `List.sort` function after concatting the lists of key values pairs from both trees this is `o(n log n)` in the worst case but is `o(n)` if the input lists are already sorted. We could make this `o(n + m)` by bassically traversing both lists at the same time and taking the smaller key value pair at each step to build a new list of key value pairs that is sorted, this would be more efficient but requires more code and makes the impl a little less readable so we opted to use the built in sorting function.
 
 Copyright ©️ 2026 Jake Follest, Kara Wilson

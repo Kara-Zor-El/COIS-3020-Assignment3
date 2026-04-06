@@ -328,31 +328,6 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
   }
 
   /// <summary>
-  /// Merges two trees into a new tree
-  /// Time Complexity: O(n + m) where n and m are the number of entries in the two trees
-  /// </summary>
-  /// <param name="tree1">The first tree to merge</param>
-  /// <param name="tree2">The second tree to merge</param>
-  /// <returns>A new tree containing all the entries from both trees</returns>
-  public static BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> tree1, BPlusTree<TKey, TValue> tree2) {
-    var newTree = new BPlusTree<TKey, TValue>(tree1._rank);
-    // Collect our entries
-    var tree1LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree1._root); // Get the left most leaf
-    var tree1Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree1LeftMostLeaf).SelectMany(l => l.Values);
-    var tree2LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree2._root); // Get the left most leaf
-    var tree2Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree2LeftMostLeaf).SelectMany(l => l.Values);
-    // NOTE: A slightly more efficient way of doing the concat that would also handle the sort is go 
-    //       through both enumerable at the same time taking the smaller entry each time into the 
-    //       accumulator list. This is O(n + m) and negates the need to sort.
-    var entries = tree1Entries.Concat(tree2Entries).ToList();
-    // NOTE: This sort is technically o(n log n) but because the trees are already sorted on their own it will require a lot less sorting and will be closer to O(n + M)
-    entries.Sort((a, b) => a.Key.CompareTo(b.Key));
-    // We can now just insert our entries into the new tree using bulk insert.
-    newTree.BulkInsert(entries); // o(log n) as the list is sorted
-    return newTree;
-  }
-  public BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> other) => Merge(this, other);
-  /// <summary>
   /// Helper function for the Delete method
   /// 
   /// <param name="node">The node to delete from</param>
@@ -625,6 +600,31 @@ public class BPlusTree<TKey, TValue> where TKey : IComparable<TKey> {
     }
     return this.DeleteHelp(this._root, key, isRoot: true);
   }
+  /// <summary>
+  /// Merges two trees into a new tree
+  /// Time Complexity: O(n + m) where n and m are the number of entries in the two trees
+  /// </summary>
+  /// <param name="tree1">The first tree to merge</param>
+  /// <param name="tree2">The second tree to merge</param>
+  /// <returns>A new tree containing all the entries from both trees</returns>
+  public static BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> tree1, BPlusTree<TKey, TValue> tree2) {
+    var newTree = new BPlusTree<TKey, TValue>(tree1._rank);
+    // Collect our entries
+    var tree1LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree1._root); // Get the left most leaf
+    var tree1Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree1LeftMostLeaf).SelectMany(l => l.Values);
+    var tree2LeftMostLeaf = BPlusTree<TKey, TValue>.GetLeftMostLeaf(tree2._root); // Get the left most leaf
+    var tree2Entries = BPlusTree<TKey, TValue>.GetLeavesFromStart(tree2LeftMostLeaf).SelectMany(l => l.Values);
+    // NOTE: A slightly more efficient way of doing the concat that would also handle the sort is go 
+    //       through both enumerable at the same time taking the smaller entry each time into the 
+    //       accumulator list. This is O(n + m) and negates the need to sort.
+    var entries = tree1Entries.Concat(tree2Entries).ToList();
+    // NOTE: This sort is technically o(n log n) but because the trees are already sorted on their own it will require a lot less sorting and will be closer to O(n + M)
+    entries.Sort((a, b) => a.Key.CompareTo(b.Key));
+    // We can now just insert our entries into the new tree using bulk insert.
+    newTree.BulkInsert(entries); // o(log n) as the list is sorted
+    return newTree;
+  }
+  public BPlusTree<TKey, TValue> Merge(BPlusTree<TKey, TValue> other) => Merge(this, other);
 }
 
 internal static class Program {
